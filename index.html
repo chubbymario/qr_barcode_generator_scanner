@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Make QR codes and barcodes in your browser. Styled QR codes with logos, 100+ barcode formats, batch export and label sheets. Nothing is uploaded."
+    />
+    <meta name="theme-color" content="#e6ebee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141c26" media="(prefers-color-scheme: dark)" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>QR &amp; Barcode Studio</title>
+  </head>
+  <body>
+    <a class="skip" href="#controls">Skip to settings</a>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M3 3h7v7H3zM5 5v3h3V5zM14 3h7v7h-7zm2 2v3h3V5zM3 14h7v7H3zm2 2v3h3v-3zM14 14h2v2h-2zM18 14h3v2h-3zM14 18h2v3h-2zM17 17h2v2h-2zM19 19h2v2h-2z"
+          />
+        </svg>
+        <h1>QR &amp; Barcode Studio</h1>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Tools">
+        <button role="tab" id="tab-qr" data-tab="qr" aria-controls="controls">QR code</button>
+        <button role="tab" id="tab-barcode" data-tab="barcode" aria-controls="controls">
+          Barcode
+        </button>
+        <button role="tab" id="tab-batch" data-tab="batch" aria-controls="controls">Batch</button>
+        <button role="tab" id="tab-print" data-tab="print" aria-controls="controls">
+          Label sheets
+        </button>
+        <button role="tab" id="tab-scan" data-tab="scan" aria-controls="controls">Scan</button>
+      </nav>
+      <button id="theme" class="btn quiet theme-btn" type="button">Theme</button>
+    </header>
+
+    <main class="workspace">
+      <section id="controls" class="controls" role="tabpanel" tabindex="-1"></section>
+      <section id="stage" class="stage" aria-label="Preview and export"></section>
+    </main>
+
+    <footer class="footer">
+      <p>Everything runs in your browser. Nothing you type or upload leaves this device.</p>
+      <p id="footer-links" class="footer-links">
+        <a href="THIRD_PARTY_LICENSES.txt">Licences</a>
+      </p>
+    </footer>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <noscript><p class="noscript">This app needs JavaScript to make codes.</p></noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
