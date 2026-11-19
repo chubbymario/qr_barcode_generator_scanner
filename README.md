@@ -86,6 +86,16 @@ Every QR code the QR code tab makes, with any style, logo or gradient, scans. Fo
 
 **Tilted and blurry photos.** zxing-cpp copes with tilt itself. For the app's own decoders the scanner measures how far the bars lean and straightens the image first, and the postal reader judges each bar against a line fitted through its neighbours, so a slight remaining tilt or a bar blurring into the text below doesn't matter. MaxiCode, which zxing-cpp only reads from clean upright images, is found by its bullseye, straightened and cut out before decoding.
 
+**Robustness testing.** Two independent test suites, written from scratch, put every readable format through simulated real-world captures with at least 13 cases per format: camera shake, hand tremor and perspective, rolling shutter and screen vibration, moiré from photographing a monitor, grainy paper and ink spread, cardboard, crumpled paper and fabric, labels on bottles, glare, low light, uneven lighting and shadows, defocus, JPEG compression, distance, and combinations of these. Barcode-free scenes made the same way never produced a read. What came out of it:
+
+- **Straightening and lighting.** The app's own decoders straighten tilted images first, and when nothing is found the scanner tries again with the lighting evened out (shadows, a lamp to one side).
+- **Postal codes on a darker surface** (a desk, a box) are read: the bar reader keeps the evenly spaced run of bars and ignores the surface around the label.
+- **No partial or borrowed reads.** Rows of a Codablock F that couldn't be put together aren't shown as Code 128; a short code found inside a longer one (a UPC-E inside an EAN-13, part of an ITF) is dropped in favour of the one more scan lines agree on; short codes with a weak check (UPC-E, EAN-8, Codabar, Code 39 or ITF without a check character) need at least 6 scan lines in a still image.
+- **Formats with no check character** (only read when picked) must read the same on two more copies of the image turned slightly each way, and bars close to the line between two heights are rejected.
+- **Incomplete reads are flagged**: an EAN/UPC with an add-on beside it that couldn't be read, or a composite whose 2D rows were seen but couldn't be decoded, carries an "Incomplete" note, and on the camera waits longer for a full read.
+
+Known limits: a GS1 composite whose 2D part is too damaged to be found at all comes back as its linear part alone (which is itself a correct read); formats with no check character (Pharmacode, Two-track Pharmacode, custom patterns) can still occasionally misread under heavy glare, which is why they're never guessed by "Everything" and need 3 agreeing camera frames.
+
 **How the app's own decoders work.**
 
 - **Reading the image:** they read bar and space widths (or, for postal codes, each bar's height) along lines across the image. Stacked codes are read row by row: each row identifies its own row number, so a damaged line can be outvoted by the lines above and below it.

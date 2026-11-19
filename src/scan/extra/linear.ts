@@ -292,7 +292,9 @@ export function decodeEanAddon(
 // ---------- Pharmacode (one-track) ----------
 
 export function decodePharmacode(bwip: BwipRaw, runs: number[]): string | null {
-  if (runs.length < 3) return null;
+  // At least 4 bars: two or three bars are too easily part of something else
+  // (a glare edge, a fragment of another code), and real Pharmacodes are longer.
+  if (runs.length < 7) return null;
   const bars = runs.filter((_, i) => i % 2 === 0);
   const spaces = runs.filter((_, i) => i % 2 === 1);
   const narrow = Math.min(...bars);

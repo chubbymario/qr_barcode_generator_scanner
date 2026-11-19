@@ -404,6 +404,12 @@ export function rotateBy(l: Luma, deg: number): Luma {
 
 /** The image straightened so its bars stand upright, or null if it's already straight. */
 export function deskew(l: Luma): Luma | null {
+  const r = straighten(l);
+  return r ? r.image : null;
+}
+
+/** The straightened image and the total angle it was turned by, or null if already straight. */
+export function straighten(l: Luma): { image: Luma; angle: number } | null {
   let a = skewAngle(l);
   if (Math.abs(a) < 0.8) return null;
   // The estimate runs a little short on blurry edges: measure what's left and correct.
@@ -414,5 +420,70 @@ export function deskew(l: Luma): Luma | null {
     a += rest;
     out = rotateBy(l, a);
   }
-  return out;
+  return { image: out, angle: a };
+}
+
+/**
+ * Even out uneven lighting (a shadow across the code, a lamp to one side):
+ * estimate the paper's brightness everywhere from the brightest pixels
+ * nearby, and divide by it, so ink is dark and paper light all over.
+ */
+export function flatten(l: Luma): Luma {
+  const B = Math.max(8, Math.round(Math.max(l.width, l.height) / 40)); // block size
+  const gw = Math.ceil(l.width / B);
+  const gh = Math.ceil(l.height / B);
+  const grid = new Float32Array(gw * gh);
+  const hist = new Uint32Array(256);
+  for (let gy = 0; gy < gh; gy++)
+    for (let gx = 0; gx < gw; gx++) {
+      hist.fill(0);
+      let n = 0;
+      for (let y = gy * B; y < Math.min(l.height, (gy + 1) * B); y += 2)
+        for (let x = gx * B; x < Math.min(l.width, (gx + 1) * B); x += 2) {
+          hist[l.data[y * l.width + x]]++;
+          n++;
+        }
+      // 90th percentile: the paper, even in a block that's mostly ink.
+      let acc = 0;
+      let v = 255;
+      for (let i = 255; i >= 0; i--) {
+        acc += hist[i];
+        if (acc >= n * 0.1) {
+          v = i;
+          break;
+        }
+      }
+      grid[gy * gw + gx] = v;
+    }
+  // Smooth the estimate (a block that's all ink would otherwise look like shadow).
+  const sm = new Float32Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++)
+    for (let gx = 0; gx < gw; gx++) {
+      let best = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = gx + dx;
+          const y = gy + dy;
+          if (x >= 0 && y >= 0 && x < gw && y < gh) best = Math.max(best, grid[y * gw + x]);
+        }
+      sm[gy * gw + gx] = best;
+    }
+  const out = new Uint8Array(l.width * l.height);
+  for (let y = 0; y < l.height; y++) {
+    const fy = Math.min(gh - 1, Math.max(0, y / B - 0.5));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(gh - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let x = 0; x < l.width; x++) {
+      const fx = Math.min(gw - 1, Math.max(0, x / B - 0.5));
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(gw - 1, x0 + 1);
+      const tx = fx - x0;
+      const bg =
+        (sm[y0 * gw + x0] * (1 - tx) + sm[y0 * gw + x1] * tx) * (1 - ty) +
+        (sm[y1 * gw + x0] * (1 - tx) + sm[y1 * gw + x1] * tx) * ty;
+      out[y * l.width + x] = Math.min(255, (l.data[y * l.width + x] * 255) / Math.max(24, bg));
+    }
+  }
+  return { data: out, width: l.width, height: l.height };
 }

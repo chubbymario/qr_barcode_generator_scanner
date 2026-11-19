@@ -627,9 +627,9 @@ function collect(l: Luma, only: string | undefined): { c16: Votes; c49: Votes; c
 export type StackedRows = ReturnType<typeof collect>;
 
 /** Phase 1 (no bwip-js needed): read rows of any stacked code in the image. */
-export function collectStacked(l: Luma, only?: string): StackedRows | null {
+export function collectStacked(l: Luma, only?: string, min = 2): StackedRows | null {
   const rows = collect(l, only);
-  return rows.c16.size >= 2 || rows.c49.size >= 2 || rows.cb.size >= 2 ? rows : null;
+  return rows.c16.size >= min || rows.c49.size >= min || rows.cb.size >= min ? rows : null;
 }
 
 /** Phase 2: assemble and verify. */

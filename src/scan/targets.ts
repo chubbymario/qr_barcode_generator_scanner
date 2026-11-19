@@ -187,12 +187,11 @@ export function framesNeeded(bcid: string | undefined, label: string): number {
     )
   )
     return 3;
-  if (
-    /qr|datamatrix|aztec|pdf417|maxicode|mailmark|composite|gs1-cc|code16k|code49|codablock/i.test(
-      bcid,
-    ) ||
-    /composite/i.test(label)
-  )
+  // A composite's linear part is a 1D read (zxing-cpp can misread a short
+  // UPC-E or EAN-8 with a valid check digit), so it needs agreement too.
+  if (/composite/i.test(bcid) || /composite/i.test(label)) return /upce|ean8/.test(bcid) ? 3 : 2;
+  if (bcid === 'upce' || bcid === 'ean8' || bcid === 'mands') return 3;
+  if (/qr|datamatrix|aztec|pdf417|maxicode|mailmark|gs1-cc|code16k|code49|codablock/i.test(bcid))
     return 1;
   return 2;
 }

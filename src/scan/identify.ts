@@ -150,9 +150,23 @@ function hibcVariant(base: Interpretation, hibcId: string, hibcLabel: string): I
 
 /** Interpretations of an EAN/UPC read's digits (with an optional add-on). */
 function retail(format: string, text: string, r: RawRead): Interpretation[] {
-  const m = /^(\d+)(?: ?(\d{2}|\d{5}))?$/.exec(text);
+  // The main number's length is fixed by the format; zxing-cpp may append an
+  // add-on with or without a space.
+  const len =
+    format === 'EAN8'
+      ? 8
+      : format === 'UPCA'
+        ? 12
+        : format === 'UPCE'
+          ? text.startsWith('0') && /^\d{13}/.test(text)
+            ? 13
+            : 8
+          : 13;
+  const m =
+    new RegExp(`^(\\d{${len}})(?: ?(\\d{2}|\\d{5}))?$`).exec(text) ?? /^(\d+)()$/.exec(text);
   if (!m) return [{ label: format, text }];
-  const [, main, addon] = m;
+  const main = m[1];
+  const addon = m[2] || undefined;
   const plus = addon ? ` ${addon}` : '';
   const addonDetail: [string, string][] = addon
     ? [[addon.length === 5 ? 'EAN-5 add-on' : 'EAN-2 add-on', addon]]
@@ -361,6 +375,44 @@ export function interpretations(base: Interpretation, r: RawRead): Interpretatio
           label: 'Italian Pharmacode (Code 32)',
           text: text.replace(/^A/, '').slice(0, -1),
           details: [['As printed', text]],
+        },
+      ];
+    case 'Telepen':
+    case 'TelepenAlpha':
+    case 'TelepenNumeric': {
+      // Telepen Numeric packs two digits per character (00–99 as codes 27–126).
+      // zxing-cpp only reads it as numeric when the first pair is 00–04, so
+      // offer the numeric reading of an alphabetic result too.
+      if (f === 'TelepenNumeric' || (/^\d+$/.test(text) && base.bcid === 'telepennumeric'))
+        return [{ ...base, bcid: 'telepennumeric', label: 'Telepen Numeric' }];
+      const codes = [...text].map((c) => c.charCodeAt(0));
+      const numeric = codes.every((c) => c >= 27 && c <= 126)
+        ? codes.map((c) => String(c - 27).padStart(2, '0')).join('')
+        : null;
+      const alpha: Interpretation = { ...base, bcid: 'telepen', label: 'Telepen' };
+      if (numeric === null) return [alpha];
+      const num: Interpretation = {
+        bcid: 'telepennumeric',
+        label: 'Telepen Numeric',
+        text: numeric,
+      };
+      // Text that's mostly punctuation is far more likely to be digits.
+      const letters = (text.match(/[A-Za-z0-9 ]/g) ?? []).length;
+      return letters >= text.length * 0.6 ? [alpha, num] : [num, alpha];
+    }
+    case 'MaxiCode':
+      // zxing-cpp shows spaces and control characters as visible symbols
+      // (␠ ␝ ␞ ␄); turn them back into the characters that were encoded.
+      return [
+        {
+          ...base,
+          text: text.replace(/[\u2400-\u2421]/g, (c) =>
+            c === '\u2421'
+              ? '\x7f'
+              : c === '\u2420'
+                ? ' '
+                : String.fromCharCode(c.charCodeAt(0) - 0x2400),
+          ),
         },
       ];
     case 'Codabar': {

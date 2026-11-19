@@ -8,6 +8,10 @@ import { BARMAP, TAB213, TAB513 } from './tables';
 
 export interface BarRead {
   states: string; // e.g. "FADT..."
+  /** False when some bar was close to the line between two states. */
+  sure?: boolean;
+  /** Mean bar height over mean bar width: real postal bars are tall and thin. */
+  aspect?: number;
   spaceToBar: number; // mean space width / mean bar width
 }
 
@@ -16,7 +20,12 @@ export interface BarRead {
  * symbol's overall extent, so the result doesn't depend on which bar types
  * happen to appear (a code with no tracker-only bars still classifies right).
  */
-function classify(tops: number[], bottoms: number[], upIsLess: boolean): string {
+function classify(
+  tops: number[],
+  bottoms: number[],
+  upIsLess: boolean,
+  out?: { sure: boolean },
+): string {
   const dir = upIsLess ? 1 : -1;
   // Work in "up is less" terms.
   const T = tops.map((v) => v * dir);
@@ -49,8 +58,13 @@ function classify(tops: number[], bottoms: number[], upIsLess: boolean): string 
   return T.map((t, i) => {
     const H = Math.abs(loAt(i) - hiAt(i)) || 1;
     // Beyond the edge counts as reaching it.
-    const asc = t - hiAt(i) < 0.2 * H;
-    const desc = loAt(i) - B[i] < 0.2 * H;
+    const up = (t - hiAt(i)) / H;
+    const down = (loAt(i) - B[i]) / H;
+    const asc = up < 0.2;
+    const desc = down < 0.2;
+    // Bar ends sit at 0 or about 37% of the height from an edge; one near the
+    // 20% dividing line (8–29%) could be read either way.
+    if (out && ((up > 0.08 && up < 0.29) || (down > 0.08 && down < 0.29))) out.sure = false;
     return asc && desc ? 'F' : asc ? 'A' : desc ? 'D' : 'T';
   }).join('');
 }
@@ -109,12 +123,21 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
 
   // Look a few rows either side too: after straightening a photo the thin
   // tracker band can still drift by a pixel or two across a long code.
-  const band = Math.max(1, Math.min(3, (y1 - y0) >> 1));
+  let lo = y - Math.max(1, Math.min(3, (y1 - y0) >> 1));
+  let hi = y + Math.max(1, Math.min(3, (y1 - y0) >> 1));
+  // Two-track Pharmacode has no row that crosses every bar (bars hang from
+  // the top, stand on the bottom, or both), so look across the whole symbol.
+  if (minBars <= 2) {
+    const need = Math.max(minBars, Math.ceil(bestCount * 0.4));
+    lo = bestY;
+    hi = bestY;
+    while (lo > 0 && counts[lo - 1] >= need) lo--;
+    while (hi < l.height - 1 && counts[hi + 1] >= need) hi++;
+  }
+  lo = Math.max(0, lo);
+  hi = Math.min(l.height - 1, hi);
   const darkNear = (x: number) => {
-    for (let dy = -band; dy <= band; dy++) {
-      const yy = y + dy;
-      if (yy >= 0 && yy < l.height && dark(x, yy)) return true;
-    }
+    for (let yy = lo; yy <= hi; yy++) if (dark(x, yy)) return true;
     return false;
   };
   const bars: [number, number][] = [];
@@ -126,6 +149,29 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
       bars.push([start, x]);
       start = -1;
     }
+  }
+  // Keep the longest run of evenly sized, evenly spaced bars: the code. A
+  // darker surface around the label (a desk, a box, a bottle) shows up as
+  // wide "bars" at the ends of the row.
+  {
+    const ws = bars.map(([a, b]) => b - a).sort((a, b) => a - b);
+    const med = ws[ws.length >> 1] ?? 0;
+    const okW = (w: number) => Math.abs(w - med) <= Math.max(2, med * 0.5);
+    const kept = bars.filter(([a, b]) => okW(b - a));
+    const pitches = kept
+      .slice(1)
+      .map(([a], i) => a - kept[i][0])
+      .sort((a, b) => a - b);
+    const pitch = pitches[pitches.length >> 1] ?? 0;
+    let best: [number, number][] = [];
+    let cur: [number, number][] = [];
+    for (const bar of bars) {
+      const prev = cur[cur.length - 1];
+      if (okW(bar[1] - bar[0]) && (!prev || bar[0] - prev[0] < pitch * 1.6)) cur.push(bar);
+      else cur = okW(bar[1] - bar[0]) ? [bar] : [];
+      if (cur.length > best.length) best = cur.slice();
+    }
+    if (best.length >= minBars) bars.splice(0, bars.length, ...best);
   }
   // Drop a thin frame line at either end (e.g. Pharmacode's border).
   const sortedW = bars.map(([a, b]) => b - a).sort((a, b) => a - b);
@@ -148,14 +194,29 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
     const cx = (a + b) >> 1;
     const col = (yy: number) =>
       dark(cx, yy) || (b - a > 2 && (dark(cx - 1, yy) || dark(cx + 1, yy)));
-    let top = y;
+    // Start from the bar's dark pixel nearest the middle row.
+    let start = y;
+    for (let k = 0; k <= Math.max(y - lo, hi - y); k++) {
+      if (y - k >= lo && col(y - k)) {
+        start = y - k;
+        break;
+      }
+      if (y + k <= hi && col(y + k)) {
+        start = y + k;
+        break;
+      }
+    }
+    let top = start;
     while (top > 0 && col(top - 1)) top--;
-    let bottom = y;
+    let bottom = start;
     while (bottom < l.height - 1 && col(bottom + 1)) bottom++;
     tops.push(top);
     bottoms.push(bottom);
   }
-  return { states: classify(tops, bottoms, true), spaceToBar: mean(gaps) / wMean };
+  const conf = { sure: true };
+  const states = classify(tops, bottoms, true, conf);
+  const aspect = mean(tops.map((t, i) => bottoms[i] - t + 1)) / wMean;
+  return { states, spaceToBar: mean(gaps) / wMean, sure: conf.sure, aspect };
 }
 
 const flip = (s: string) =>
@@ -168,7 +229,8 @@ function matches(bwip: BwipRaw, bcid: string, text: string, read: BarRead, opts 
   const exp = statesFromRaw(bwip, bcid, text, opts);
   if (!exp || exp.states !== read.states) return false;
   const ratio = read.spaceToBar / exp.spaceToBar;
-  return ratio > 0.55 && ratio < 1.8;
+  // Loose: blur and tilt make bars look fatter or thinner than drawn.
+  return ratio > 0.4 && ratio < 2.5;
 }
 
 // ---------- POSTNET / PLANET ----------
@@ -493,6 +555,9 @@ function decodePharmacode2(bwip: BwipRaw, read: BarRead): string | null {
   return null;
 }
 
+/** Height-modulated formats without a check character. */
+const NO_CHECK = new Set(['kix', 'pharmacode2']);
+
 const POSTAL: [string, (b: BwipRaw, r: BarRead) => string | null][] = [
   ['onecode', decodeImb],
   ['japanpost', decodeJapanPost],
@@ -511,12 +576,15 @@ export function decodePostal(
   skip?: ReadonlySet<string>,
 ): { bcid: string; text: string } | null {
   for (const r of [read, { ...read, states: flip(read.states) }]) {
+    // Formats with no check character only accept a read with no doubtful bars.
     if (only === 'daft') {
+      if (r.sure === false) continue;
       if (matches(bwip, 'daft', r.states, r)) return { bcid: 'daft', text: r.states };
       continue;
     }
     for (const [bcid, fn] of POSTAL) {
       if ((only && only !== bcid) || skip?.has(bcid)) continue;
+      if (NO_CHECK.has(bcid) && r.sure === false) continue;
       const text = fn(bwip, r);
       if (text !== null) return { bcid, text };
     }

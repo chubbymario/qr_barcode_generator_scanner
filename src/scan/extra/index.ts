@@ -18,7 +18,7 @@ import { decodeStacked, STACKED_FORMATS } from './stacked';
 import type { BwipRaw, ExtraResult } from './types';
 
 export type { BwipRaw, ExtraResult } from './types';
-export { deskew, lumaFromRgba, type Luma } from './lines';
+export { deskew, flatten, lumaFromRgba, rotateBy, straighten, type Luma } from './lines';
 export { decodeStacked, collectStacked, finishStacked } from './stacked';
 export { collectCca, decodeCca } from './cca';
 
@@ -177,12 +177,17 @@ export function decodeExtra(
     );
   }
   if (wantPostalAll) {
+    // Upright and turned: keep the reading whose "bars" are tallest for their
+    // width. Turned the wrong way, rows of a code can pass for short bars.
+    let postal: { r: ExtraResult; n: number; aspect: number } | null = null;
     for (const l of [image, turned()]) {
       const bars = readBars(l, only === 'pharmacode2' ? 2 : only ? 4 : 10);
       if (!bars) continue;
       const r = decodePostal(bwip, bars, only, strict ? PICK_ONLY : undefined);
-      if (r) candidates.push({ result: r, bars: bars.states.length, hits: 1 });
+      const aspect = bars.aspect ?? 0;
+      if (r && (!postal || aspect > postal.aspect)) postal = { r, n: bars.states.length, aspect };
     }
+    if (postal) candidates.push({ result: postal.r, bars: postal.n, hits: 1 });
   }
   const top = best(candidates);
   if (top) return top.result;

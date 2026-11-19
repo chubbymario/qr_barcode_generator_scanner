@@ -77,6 +77,88 @@ describe('specific cases', () => {
   );
 });
 
+describe('fixes from the independent checks', () => {
+  it.each(['12345678', '99887766', '2026', '00112233'])('Telepen Numeric %s', async (n) => {
+    const img = await renderFormat('telepennumeric', n);
+    const [p] = await scanImage(img as never, { lookFor: 'telepennumeric' });
+    expect(p.text).toBe(n);
+    const [a] = await scanImage(img as never, { lookFor: 'auto' });
+    const all = [a, ...(a.alternatives ?? [])];
+    expect(all.some((x) => x.bcid === 'telepennumeric' && x.text === n)).toBe(true);
+  });
+  it('MaxiCode text has real spaces and control characters', async () => {
+    const [p] = await scanImage((await renderFormat('maxicode')) as never, { lookFor: 'maxicode' });
+    expect(p.text).not.toMatch(/[\u2400-\u2421]/);
+    expect(p.text).toContain('634 ALPHA DR');
+  });
+  it('the 2D composite part on its own has no garbage alternative', async () => {
+    const [p] = await scanImage((await renderFormat('gs1-cc')) as never, { lookFor: 'gs1-cc' });
+    expect(p.alternatives).toBeUndefined();
+  });
+  it('a GS1-128 composite has the same name in both modes', async () => {
+    const img = await renderFormat('gs1-128composite');
+    const [p] = await scanImage(img as never, { lookFor: 'gs1-128composite' });
+    const [a] = await scanImage(img as never, { lookFor: 'auto' });
+    expect(p.label).toBe('GS1-128 composite');
+    expect(a.label).toBe('GS1-128 composite');
+    expect(a.alternatives?.some((x) => x.bcid === a.bcid)).toBeFalsy();
+  });
+  it.each(['pharmacode2', 'daft', 'kix'])(
+    '%s never returns a wrong value when tilted',
+    async (bcid) => {
+      for (const angle of [3, -4, 5, -7, 9]) {
+        const img = degrade(await renderFormat(bcid, undefined, 3), { angle, scale: 1, blur: 1 });
+        const r = await scanImage(img as never, { lookFor: bcid });
+        if (r.length) expect(norm(r[0].text), `${bcid} at ${angle}°`).toBe(norm(sampleText(bcid)));
+      }
+    },
+  );
+});
+
+describe('fixes from the robustness testers', () => {
+  /** The label on a darker surface (a desk, a box): a grey border around the render. */
+  const onSurface = (
+    img: { data: Uint8ClampedArray; width: number; height: number },
+    grey = 100,
+    border = 60,
+  ) => {
+    const W = img.width + border * 2;
+    const H = img.height + border * 2;
+    const data = new Uint8ClampedArray(W * H * 4).fill(grey);
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    for (let y = 0; y < img.height; y++)
+      data.set(
+        img.data.subarray(y * img.width * 4, (y + 1) * img.width * 4),
+        ((y + border) * W + border) * 4,
+      );
+    return { data, width: W, height: H };
+  };
+  it.each([
+    'onecode',
+    'royalmail',
+    'postnet',
+    'planet',
+    'auspost',
+    'japanpost',
+    'kix',
+    'pharmacode2',
+    'daft',
+  ])('%s on a darker surface', async (bcid) => {
+    const img = onSurface(await renderFormat(bcid, undefined, 3));
+    const [p] = await scanImage(img as never, { lookFor: bcid });
+    expect(p?.bcid).toBe(bcid);
+    expect(norm(p.text)).toBe(norm(sampleText(bcid)));
+  });
+  it('an add-on joined on without a space is read once', async () => {
+    const { interpretations } = await import('../src/scan/identify');
+    const [top] = interpretations(
+      { label: 'EAN-13', text: '977031117500117' },
+      { format: 'EAN13' },
+    );
+    expect(top).toMatchObject({ bcid: 'issn', text: '0311-175X 00 17' });
+  });
+});
+
 describe('check helpers', () => {
   it('work on known values', () => {
     expect(mod43('THIS IS CODE 39')).toBe('Q');
