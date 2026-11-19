@@ -167,16 +167,27 @@ export function buildBarcodePanel(ctx: PanelContext, symbols: readonly SymbolInf
       set((b) => (b.transparentBackground = v));
     }),
     bgField,
-    field(
-      'Quiet zone',
-      range(bc.paddingModules, (v) => set((b) => (b.paddingModules = v)), {
-        min: 0,
-        max: 40,
-        step: 1,
-        format: (v) => `${v} modules`,
-      }),
-      'Blank space around the code. Most 1D scanners want at least 10 modules.',
-    ),
+    is2D(bc.bcid)
+      ? field(
+          'Quiet zone',
+          range(bc.quietZone2D, (v) => set((b) => (b.quietZone2D = v)), {
+            min: 0,
+            max: 12,
+            step: 1,
+            format: (v) => `${v} modules`,
+          }),
+          'Blank space on every side. QR codes need 4 modules; most other 2D codes 1–2. Scanners find a code more easily with more, especially on a dark page or screen.',
+        )
+      : field(
+          'Quiet zone',
+          range(bc.paddingModules, (v) => set((b) => (b.paddingModules = v)), {
+            min: 0,
+            max: 40,
+            step: 1,
+            format: (v) => `${v} modules`,
+          }),
+          'Blank space before and after the code. Most 1D scanners want at least 10 modules.',
+        ),
     checkbox('Draw a border', bc.showborder, (v) => set((b) => (b.showborder = v))),
     field(
       'Rotation',

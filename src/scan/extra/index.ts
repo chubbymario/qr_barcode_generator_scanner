@@ -13,12 +13,12 @@ import {
   decodeWidthFormats,
   WIDTH_SPECS,
 } from './linear';
-import { decodePostal, readBars } from './postal';
+import { decodePostal, readBarsCandidates } from './postal';
 import { decodeStacked, STACKED_FORMATS } from './stacked';
 import type { BwipRaw, ExtraResult } from './types';
 
 export type { BwipRaw, ExtraResult } from './types';
-export { deskew, flatten, lumaFromRgba, rotateBy, straighten, type Luma } from './lines';
+export { deskew, flatten, lumaFromRgba, rotate90, rotateBy, straighten, type Luma } from './lines';
 export { decodeStacked, collectStacked, finishStacked } from './stacked';
 export { collectCca, decodeCca } from './cca';
 
@@ -181,11 +181,16 @@ export function decodeExtra(
     // width. Turned the wrong way, rows of a code can pass for short bars.
     let postal: { r: ExtraResult; n: number; aspect: number } | null = null;
     for (const l of [image, turned()]) {
-      const bars = readBars(l, only === 'pharmacode2' ? 2 : only ? 4 : 10);
-      if (!bars) continue;
-      const r = decodePostal(bwip, bars, only, strict ? PICK_ONLY : undefined);
-      const aspect = bars.aspect ?? 0;
-      if (r && (!postal || aspect > postal.aspect)) postal = { r, n: bars.states.length, aspect };
+      // Of the bands that decode, the one with the most bars (then the
+      // tallest): the dimension marks or text beside a code have fewer.
+      for (const bars of readBarsCandidates(l, only === 'pharmacode2' ? 2 : only ? 4 : 10)) {
+        const r = decodePostal(bwip, bars, only, strict ? PICK_ONLY : undefined);
+        if (!r) continue;
+        const n = bars.states.length;
+        const aspect = bars.aspect ?? 0;
+        if (!postal || n > postal.n || (n === postal.n && aspect > postal.aspect))
+          postal = { r, n, aspect };
+      }
     }
     if (postal) candidates.push({ result: postal.r, bars: postal.n, hits: 1 });
   }

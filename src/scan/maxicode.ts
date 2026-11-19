@@ -115,13 +115,14 @@ export function findBullseyes(l: Luma): Bullseye[] {
 }
 
 function cropLuma(l: Luma, x0: number, y0: number, w: number, h: number): Luma {
-  const out = new Uint8Array(w * h).fill(255);
+  // Outside the image, repeat its edge pixels (so a dark border stays
+  // connected to the edge of the window).
+  const out = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
-    const sy = y0 + y;
-    if (sy < 0 || sy >= l.height) continue;
+    const sy = Math.min(l.height - 1, Math.max(0, y0 + y));
     for (let x = 0; x < w; x++) {
-      const sx = x0 + x;
-      if (sx >= 0 && sx < l.width) out[y * w + x] = l.data[sy * l.width + sx];
+      const sx = Math.min(l.width - 1, Math.max(0, x0 + x));
+      out[y * w + x] = l.data[sy * l.width + sx];
     }
   }
   return { data: out, width: w, height: h };
@@ -132,34 +133,94 @@ function cropLuma(l: Luma, x0: number, y0: number, w: number, h: number): Luma {
  * as RGBA image data for zxing-cpp. Several per symbol (grid straightened
  * at each of the angles a hexagon grid allows).
  */
-export function maxiCodeCandidates(
-  l: Luma,
-): { data: Uint8ClampedArray; width: number; height: number }[] {
-  const out: { data: Uint8ClampedArray; width: number; height: number }[] = [];
+export interface MaxiCandidate {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+  /** Roughly where the symbol is in the original image. */
+  corners: { x: number; y: number }[];
+}
+
+export function maxiCodeCandidates(l: Luma): MaxiCandidate[] {
+  const out: MaxiCandidate[] = [];
   for (const b of findBullseyes(l).slice(0, 3)) {
-    // The whole symbol is about 3.3 bullseyes wide; take a generous square.
-    const half = Math.round(b.span * 2.3);
+    // The symbol is 3.2–3.9 bullseyes wide depending on how it was drawn
+    // (on-screen previews draw the rings smaller); take a generous square.
+    const half = Math.round(b.span * 2.8);
     const win = cropLuma(l, Math.round(b.x - half), Math.round(b.y - half), half * 2, half * 2);
     // Hexagon edges repeat every 60°, so measure the tilt with 6-fold symmetry.
     const a = skewAngle(win, 6);
     for (const turn of [a, a + 60, a - 60]) {
       const upright = Math.abs(turn) < 0.5 ? win : rotateBy(win, turn);
       const t = otsuOf(upright);
-      // Bounding box of dark pixels near the bullseye (the symbol itself).
-      const reach = b.span * 1.85;
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -1;
-      let y1 = -1;
-      for (let y = 0; y < upright.height; y++)
-        for (let x = 0; x < upright.width; x++) {
-          if (Math.abs(x - half) > reach || Math.abs(y - half) > reach) continue;
-          if (upright.data[y * upright.width + x] >= t) continue;
-          if (x < x0) x0 = x;
-          if (x > x1) x1 = x;
-          if (y < y0) y0 = y;
-          if (y > y1) y1 = y;
+      // Dark surroundings (a dark page or desk right up to a thin quiet
+      // zone) touch the edge of the window; the symbol's hexagons don't.
+      // Clear everything dark that's connected to the edge.
+      const UW = upright.width;
+      const UH = upright.height;
+      const bg = new Uint8Array(UW * UH);
+      const stack: number[] = [];
+      const push = (i: number) => {
+        if (!bg[i] && upright.data[i] < t) {
+          bg[i] = 1;
+          stack.push(i);
         }
+      };
+      for (let x = 0; x < UW; x++) {
+        push(x);
+        push((UH - 1) * UW + x);
+      }
+      for (let y = 0; y < UH; y++) {
+        push(y * UW);
+        push(y * UW + UW - 1);
+      }
+      while (stack.length) {
+        const i = stack.pop()!;
+        const x = i % UW;
+        if (x > 0) push(i - 1);
+        if (x < UW - 1) push(i + 1);
+        if (i >= UW) push(i - UW);
+        if (i < UW * (UH - 1)) push(i + UW);
+      }
+      const isInk = (x: number, y: number) => !bg[y * UW + x] && upright.data[y * UW + x] < t;
+      // The symbol's extent: grow outwards from the bullseye until a blank
+      // gap about a module wide, the quiet zone. Anything beyond it (size
+      // marks, a caption, a neighbouring code) is left out. At most about 2
+      // bullseyes each way (the symbol is 3.2–3.9 bullseyes wide).
+      const reach = Math.round(b.span * 2.4);
+      const gap = Math.max(2, Math.round(b.span * 0.1));
+      const cx = Math.round(half);
+      const cy = Math.round(half);
+      const inkIn = (xa: number, xb: number, ya: number, yb: number) => {
+        for (let y = Math.max(0, ya); y <= Math.min(UH - 1, yb); y++)
+          for (let x = Math.max(0, xa); x <= Math.min(UW - 1, xb); x++)
+            if (isInk(x, y)) return true;
+        return false;
+      };
+      const grow = (from: number, dir: 1 | -1, lineHas: (v: number) => boolean) => {
+        let edge = from;
+        let blank = 0;
+        for (let k = 1; k <= reach; k++) {
+          const v = from + dir * k;
+          if (lineHas(v)) {
+            edge = v;
+            blank = 0;
+          } else if (++blank >= gap) break;
+        }
+        return edge;
+      };
+      let x0 = cx - Math.round(b.span / 2);
+      let x1 = cx + Math.round(b.span / 2);
+      let y0 = cy - Math.round(b.span / 2);
+      let y1 = cy + Math.round(b.span / 2);
+      for (let pass = 0; pass < 2; pass++) {
+        const col = (x: number) => inkIn(x, x, cy - reach, cy + reach) && inkIn(x, x, y0, y1);
+        x0 = grow(cx, -1, col);
+        x1 = grow(cx, 1, col);
+        const row = (y: number) => inkIn(x0, x1, y, y);
+        y0 = grow(cy, -1, row);
+        y1 = grow(cy, 1, row);
+      }
       if (x1 < 0) continue;
       const w = x1 - x0 + 1;
       const h = y1 - y0 + 1;
@@ -171,11 +232,27 @@ export function maxiCodeCandidates(
       const data = new Uint8ClampedArray(W * H * 4).fill(255);
       for (let y = 0; y < h; y++)
         for (let x = 0; x < w; x++) {
-          const v = upright.data[(y0 + y) * upright.width + x0 + x] < t ? 0 : 255;
+          // Keep the grey levels (zxing-cpp samples small, soft-edged
+          // hexagons better than a hard black-and-white copy); only the
+          // surroundings are blanked.
+          const i0 = (y0 + y) * UW + x0 + x;
+          const v = bg[i0] ? 255 : upright.data[i0];
           const i = ((y + pad) * W + x + pad) * 4;
           data[i] = data[i + 1] = data[i + 2] = v;
         }
-      out.push({ data, width: W, height: H });
+      const hx = b.span * 1.7;
+      const hy = b.span * 1.6;
+      out.push({
+        data,
+        width: W,
+        height: H,
+        corners: [
+          { x: b.x - hx, y: b.y - hy },
+          { x: b.x + hx, y: b.y - hy },
+          { x: b.x + hx, y: b.y + hy },
+          { x: b.x - hx, y: b.y + hy },
+        ],
+      });
     }
   }
   return out;

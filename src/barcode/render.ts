@@ -92,9 +92,20 @@ export async function planBarcode(
   }
 }
 
+/**
+ * bwip-js rounds every bar to whole units at the scale it draws at, so an SVG
+ * drawn at scale 1 loses the fractional widths some formats use (PosiCode,
+ * USPS FIM marks, MaxiCode's hexagons) and no longer matches the symbol.
+ * Draw vector output at a finer scale; the viewBox scales with it.
+ */
+const SVG_SCALE = 8;
+function vectorSvg(bwip: Bwip, plan: BarcodePlan): string {
+  return bwip.toSVG({ ...plan.options, scaleX: SVG_SCALE, scaleY: SVG_SCALE } as never);
+}
+
 export async function barcodeSvg(plan: BarcodePlan, physical: boolean): Promise<string> {
   const bwip = await loadBwip();
-  const svg = bwip.toSVG(plan.options as never);
+  const svg = vectorSvg(bwip, plan);
   return physical ? setSvgPhysicalSize(svg, plan.widthMm, plan.heightMm) : svg;
 }
 
@@ -119,12 +130,7 @@ export async function renderBarcode(
       throw new Error(explainBwipError(err), { cause: err });
     }
   } else {
-    canvas = await rasterizeSvg(
-      bwip.toSVG(plan.options as never),
-      plan.widthPx,
-      plan.heightPx,
-      null,
-    );
+    canvas = await rasterizeSvg(vectorSvg(bwip, plan), plan.widthPx, plan.heightPx, null);
   }
   if (format === 'png') return withDpi(await canvasToBlob(canvas, 'image/png'), ex.dpi);
   const bg = s.transparentBackground ? '#ffffff' : s.backgroundcolor;

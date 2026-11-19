@@ -28,13 +28,14 @@ import {
   lumaFromRgba,
   flatten,
   rotateBy,
+  rotate90,
   straighten,
   type BwipRaw,
   type Luma,
 } from './extra';
 import { decodeCompositeBits } from './gs1cc';
 import { maxiCodeCandidates } from './maxicode';
-import { barsAfter, looksLikeStackedRow } from './neighbours';
+import { barsAfter, darkQuietZones, darkSurround, looksLikeStackedRow } from './neighbours';
 import { interpretations, preferTarget } from './identify';
 import { SYMBOL_NAMES } from '../barcode/names';
 import { loadBwip } from '../barcode/render';
@@ -67,8 +68,8 @@ export interface ScanOptions {
   extras?: boolean;
   /** A live camera frame, which needs stricter settings than a still image. */
   live?: boolean;
-  /** Internal: this is already the evened-out copy, don't even it out again. */
-  flattened?: boolean;
+  /** Internal: this is already a retry (lighting evened out, or colours swapped). */
+  retry?: 'flat' | 'invert';
 }
 
 async function bwipRaw(): Promise<BwipRaw> {
@@ -97,6 +98,9 @@ function compositeId(r: ReadResult): string | undefined {
   if (r.format === 'Code128') return r.contentType === 'GS1' ? 'gs1-128composite' : undefined;
   return COMPOSITE_OF[r.format];
 }
+
+/** EAN/UPC reads with an add-on beside them that couldn't be read. */
+const addOnUnread = new WeakSet<ReadResult>();
 
 /** The format the scanner is set to, if it's one format (used to rank interpretations). */
 let preferred: string | undefined;
@@ -128,13 +132,25 @@ function fromZxing(r: ReadResult): ScanResult {
   const alternatives = rest
     .filter((a) => a.label !== top.label || a.text !== top.text)
     .map((a) => ({ label: a.label, text: a.text, bcid: a.bcid }));
+  const unread = addOnUnread.has(r);
   return {
+    ...(unread ? { frames: 6 } : {}),
     text: top.text,
     label: top.label,
     bcid: top.bcid,
     engine: 'zxing',
     corners: p ? [p.topLeft, p.topRight, p.bottomRight, p.bottomLeft] : undefined,
-    details: top.details?.length ? top.details : undefined,
+    details: unread
+      ? [
+          ...(top.details ?? []),
+          [
+            'Incomplete',
+            'There’s an add-on (e.g. a price) beside this code that couldn’t be read. Move closer or hold steadier.',
+          ],
+        ]
+      : top.details?.length
+        ? top.details
+        : undefined,
     alternatives: alternatives.length ? alternatives : undefined,
     edit: top.edit,
   };
@@ -201,8 +217,9 @@ async function postProcess(
   let unreadCc = false;
   // 2. No 2D part found yet, but a linear GS1 code is present: look for CC-A/CC-B rows.
   if (linear.length && !ccs.length) {
-    // Try the image as it is, then straightened.
-    const copies = [luma, straight];
+    // Try the image as it is, straightened, and turned a quarter (a code
+    // printed sideways has its 2D rows running up the page).
+    const copies = [luma, straight, () => rotate90(luma())];
     for (const get of copies) {
       const l = get();
       if (!l) continue;
@@ -300,6 +317,32 @@ async function postProcess(
   return out;
 }
 
+/** RGBA image turned a quarter turn clockwise. */
+function turnRgba(c: { data: Uint8ClampedArray; width: number; height: number }) {
+  const { width: w, height: h } = c;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const s = (y * w + x) * 4;
+      const d = (x * h + (h - 1 - y)) * 4;
+      data[d] = c.data[s];
+      data[d + 1] = c.data[s + 1];
+      data[d + 2] = c.data[s + 2];
+      data[d + 3] = 255;
+    }
+  return { data, width: h, height: w };
+}
+
+/** Top and bottom edges of the outline run the same way and the same length. */
+function parallelogram(q: NonNullable<ReadResult['position']>): boolean {
+  const ax = q.topRight.x - q.topLeft.x;
+  const ay = q.topRight.y - q.topLeft.y;
+  const bx = q.bottomRight.x - q.bottomLeft.x;
+  const by = q.bottomRight.y - q.bottomLeft.y;
+  const len = Math.hypot(ax, ay) || 1;
+  return Math.hypot(ax - bx, ay - by) < len * 0.15;
+}
+
 type Box = { x0: number; y0: number; x1: number; y1: number };
 function boxOf(r: ReadResult): Box | null {
   const p = r.position;
@@ -318,11 +361,53 @@ const span = (b: Box) => Math.max(b.x1 - b.x0, b.y1 - b.y0);
  * several Code 128 reads stacked exactly on top of each other are the rows
  * of a Codablock F (handled separately), not separate codes.
  */
-function pruneOverlaps(results: ReadResult[], live = false): ReadResult[] {
+function pruneOverlaps(
+  results: ReadResult[],
+  live = false,
+  image?: Luma,
+  retry = false,
+): ReadResult[] {
   const linear = (r: ReadResult) => !/QR|DataMatrix|Aztec|PDF417|MaxiCode/.test(r.format);
+  // A retry (lighting evened out, colours swapped) is a last resort: a 1D read
+  // there must be crossed by a few scan lines, not just one or two.
+  if (retry) results = results.filter((r) => !(linear(r) && r.lineCount > 0 && r.lineCount < 5));
+  // A 1D read "the normal way round" from a code whose surroundings are
+  // darker than it is a light-on-dark code read inside out: drop it, and the
+  // colour-swapped retry will read it properly.
+  if (image)
+    results = results.filter(
+      (r) =>
+        !(
+          linear(r) &&
+          !r.isInverted &&
+          r.position &&
+          // Beyond the ends of the row when the outline is a clean
+          // parallelogram; otherwise, and for DataBar Expanded Stacked (whose
+          // rows have different lengths), in a thin ring all round.
+          (parallelogram(r.position) && r.format !== 'DataBarExpStk'
+            ? darkQuietZones(image, r.position)
+            : darkSurround(image, r.position))
+        ),
+    );
   // Short codes with a weak check (UPC-E, EAN-8, Codabar, and Code 39 or ITF
   // without a check character) found on only a couple of scan lines are
   // usually a misread of something else: a real one is crossed by many lines.
+  // Two reads of one 2D symbol, one with extra characters on the end and less
+  // error correction to spare: keep the cleaner one.
+  const uec = (r: ReadResult) => {
+    const m = /"UEC":([\d.]+)/.exec(r.extra ?? '');
+    return m ? Number(m[1]) : 1;
+  };
+  results = results.filter(
+    (r) =>
+      !results.some(
+        (o) =>
+          o !== r &&
+          o.format === r.format &&
+          (r.text.startsWith(o.text) || o.text.startsWith(r.text)) &&
+          uec(o) > uec(r),
+      ),
+  );
   const weak = (r: ReadResult) =>
     /^(UPCE|EAN8|Codabar)$/.test(r.format) ||
     (/^Code39/.test(r.format) && r.symbologyIdentifier !== ']A1') ||
@@ -404,13 +489,18 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     const s = straight();
     const r = (s && decodeExtra(bwip, s, o)) || decodeExtra(bwip, luma(), o);
     // Formats with no check character: confirm on two more copies turned a
-    // little each way. A real code reads the same; a misread rarely does.
+    // little each way. A real code reads the same on at least one, and never
+    // differently; a misread rarely does.
     if (r && o?.only && PICK_ONLY.has(o.only)) {
       const base = straightened()?.angle ?? 0;
+      let agree = 0;
       for (const turn of [0.35, -0.35]) {
         const again = decodeExtra(bwip, rotateBy(luma(), base + turn), o);
-        if (!again || again.text !== r.text) return null;
+        // A different reading means the bars are ambiguous: show nothing.
+        if (again && again.text !== r.text) return null;
+        if (again) agree++;
       }
+      if (!agree) return null;
     }
     return r;
   };
@@ -425,9 +515,10 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
           : {}),
       }),
       opts.live,
+      luma(),
+      !!opts.retry,
     );
   let out: ScanResult[] = [];
-  const missingAddOn = new Set<ReadResult>();
 
   // zxing-cpp often misses an EAN-2/EAN-5 add-on (an ISBN's price, an ISSN's
   // issue number); look for one with the app's own reader.
@@ -441,20 +532,26 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
       const add =
         extra(bwip, { only: 'ean5', lines: 20 }) ?? extra(bwip, { only: 'ean2', lines: 20 });
       if (add) r.text = `${r.text} ${add.text}`;
-      else if (r.position && barsAfter(luma(), r.position)) missingAddOn.add(r);
+      else if (r.position && barsAfter(luma(), r.position)) addOnUnread.add(r);
     }
     return results;
   };
 
   // MaxiCode in a photo: cut out a clean upright copy for zxing-cpp.
   const maxi = async (): Promise<ScanResult[]> => {
-    for (const c of maxiCodeCandidates(luma())) {
-      const img =
-        typeof ImageData !== 'undefined'
-          ? new ImageData(c.data as Uint8ClampedArray<ArrayBuffer>, c.width, c.height)
-          : (c as unknown as ImageData);
-      const r = await readWithZxing(img, { formats: ['MaxiCode'], tryHarder: true });
-      if (r.length) return r.map((x) => ({ ...fromZxing(x), corners: undefined }));
+    for (const c0 of maxiCodeCandidates(luma())) {
+      // The cut-out is upright to within 60°; zxing-cpp's pure reader also
+      // needs it the right way round, so try each quarter turn.
+      let c: { data: Uint8ClampedArray; width: number; height: number } = c0;
+      for (let turn = 0; turn < 4; turn++) {
+        const img =
+          typeof ImageData !== 'undefined'
+            ? new ImageData(c.data as Uint8ClampedArray<ArrayBuffer>, c.width, c.height)
+            : (c as unknown as ImageData);
+        const r = await readWithZxing(img, { formats: ['MaxiCode'], tryHarder: true });
+        if (r.length) return r.map((x) => ({ ...fromZxing(x), corners: c0.corners }));
+        c = turnRgba(c);
+      }
     }
     return [];
   };
@@ -463,10 +560,36 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     const results = await withAddOn(await zx(AUTO_ZXING_FORMATS));
     out =
       target === 'standard' ? results.map(fromZxing) : await postProcess(results, luma, straight);
-    if (!out.length && !opts.fast) out = await maxi();
-    if (!out.length && target === 'auto' && opts.extras !== false) {
+    // In a still image there may be several codes: look for the ones
+    // zxing-cpp can't read too. On the camera, one find at a time is enough.
+    const more = !opts.live || !out.length;
+    const add = (r: ScanResult) => {
+      if (!out.some((o) => o.text === r.text)) out.push(r);
+    };
+    if (more && !opts.fast) (await maxi()).forEach(add);
+    // Blank out what's been read already, so the row-based readers (which
+    // look for the row with the most bars) aren't drawn to it.
+    if (more && out.some((r) => r.corners)) {
+      const l = luma();
+      const data = new Uint8Array(l.data);
+      for (const r of out) {
+        if (!r.corners) continue;
+        const xs = r.corners.map((p) => p.x);
+        const ys = r.corners.map((p) => p.y);
+        const padX = (Math.max(...xs) - Math.min(...xs)) * 0.12 + 4;
+        const padY = (Math.max(...ys) - Math.min(...ys)) * 0.12 + 4;
+        const x0 = Math.max(0, Math.floor(Math.min(...xs) - padX));
+        const x1 = Math.min(l.width - 1, Math.ceil(Math.max(...xs) + padX));
+        const y0 = Math.max(0, Math.floor(Math.min(...ys) - padY));
+        const y1 = Math.min(l.height - 1, Math.ceil(Math.max(...ys) + padY));
+        for (let y = y0; y <= y1; y++) data.fill(255, y * l.width + x0, y * l.width + x1 + 1);
+      }
+      lumaCache = { data, width: l.width, height: l.height };
+      straightCache = undefined;
+    }
+    if (more && target === 'auto' && opts.extras !== false) {
       const r = extra(await bwipRaw(), { lines: opts.fast ? 14 : 30, strict: true });
-      if (r) out.push(fromExtra(r));
+      if (r) add(fromExtra(r));
     }
   } else if (ZX_TARGETS[target]) {
     const t = ZX_TARGETS[target];
@@ -490,28 +613,33 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     });
     if (r) out.push(fromExtra(r));
   }
-  // Nothing found: try once more with the lighting evened out (a shadow or a
-  // lamp to one side defeats thresholds tuned to the whole line).
-  if (
-    !out.length &&
-    !opts.fast &&
-    !opts.flattened &&
-    (target !== 'auto' || opts.extras !== false)
-  ) {
-    const f = flatten(luma());
-    const rgba = new Uint8ClampedArray(f.width * f.height * 4);
-    for (let i = 0; i < f.data.length; i++) {
-      rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = f.data[i];
-      rgba[i * 4 + 3] = 255;
-    }
-    const img =
-      typeof ImageData !== 'undefined'
+  // Nothing found: try again with the lighting evened out (a shadow or a
+  // lamp to one side defeats thresholds tuned to the whole line), then with
+  // light and dark swapped (white bars on black: zxing-cpp's own inverted
+  // retry doesn't cover 1D codes).
+  if (!out.length && !opts.fast && !opts.retry && (target !== 'auto' || opts.extras !== false)) {
+    const asImage = (f: Luma) => {
+      const rgba = new Uint8ClampedArray(f.width * f.height * 4);
+      for (let i = 0; i < f.data.length; i++) {
+        rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = f.data[i];
+        rgba[i * 4 + 3] = 255;
+      }
+      return typeof ImageData !== 'undefined'
         ? new ImageData(rgba, f.width, f.height)
         : ({ data: rgba, width: f.width, height: f.height } as unknown as ImageData);
-    // On the camera the retry uses the quick settings, to keep frames coming.
-    return scanImage(img, { ...opts, flattened: true, fast: opts.live ? true : opts.fast });
+    };
+    // On the camera the retries use the quick settings, to keep frames coming.
+    const fast = opts.live ? true : opts.fast;
+    const flat = await scanImage(asImage(flatten(luma())), { ...opts, retry: 'flat', fast });
+    if (flat.length) return flat;
+    const l = luma();
+    const inv = { data: l.data.map((v) => 255 - v), width: l.width, height: l.height };
+    const found = await scanImage(asImage(inv), { ...opts, retry: 'invert', fast });
+    return found.map((r) => ({
+      ...r,
+      details: [...(r.details ?? []), ['Colours', 'Light bars on a dark background']],
+    }));
   }
-  const incompleteTexts = new Set([...missingAddOn].map((r) => r.text));
   // The same code read twice (two scan directions, say) is shown once.
   const seenKeys = new Set<string>();
   out = out.filter((r) => {
@@ -520,24 +648,5 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     seenKeys.add(k);
     return true;
   });
-  return out.map((r) => {
-    const flag =
-      incompleteTexts.size && [...incompleteTexts].some((t) => r.text.includes(t.slice(3, 12)));
-    return {
-      ...r,
-      ...(flag
-        ? {
-            details: [
-              ...(r.details ?? []),
-              [
-                'Incomplete',
-                'There’s an add-on (e.g. a price) beside this code that couldn’t be read. Move closer or hold steadier.',
-              ] as [string, string],
-            ],
-            frames: 6,
-          }
-        : {}),
-      frames: flag ? 6 : (r.frames ?? framesNeeded(r.bcid, r.label)),
-    };
-  });
+  return out.map((r) => ({ ...r, frames: r.frames ?? framesNeeded(r.bcid, r.label) }));
 }

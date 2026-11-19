@@ -2,7 +2,7 @@
 // Kept free of DOM and bwip-js imports so they can be unit-tested in Node.
 
 import type { BarcodeSettings } from '../state';
-import { usesBarHeight } from './catalog';
+import { is2D, usesBarHeight } from './catalog';
 
 export type BwipValue = string | number | boolean;
 export type BwipOptions = Record<string, BwipValue> & { bcid: string; text: string };
@@ -43,6 +43,20 @@ export function barHeightParam(heightMm: number, dpi: number, pxPerUnit: number)
   return (heightMm * dpi) / (72 * pxPerUnit);
 }
 
+/**
+ * bwip-js measures padding in its own units, not modules: one unit per module
+ * for 1D and stacked codes, two for 2D matrix codes, and about four for
+ * MaxiCode's hexagons. 2D codes get the same blank border on every side.
+ */
+export function quietZone(s: BarcodeSettings): { paddingwidth: number; paddingheight: number } {
+  if (is2D(s.bcid)) {
+    const unit = s.bcid === 'maxicode' ? 4 : 2;
+    const p = Math.round(s.quietZone2D * unit);
+    return { paddingwidth: p, paddingheight: p };
+  }
+  return { paddingwidth: s.paddingModules, paddingheight: Math.round(s.paddingModules / 2) };
+}
+
 export function buildBwipOptions(
   s: BarcodeSettings,
   text: string,
@@ -56,8 +70,7 @@ export function buildBwipOptions(
     scaleX: scale.x,
     scaleY: scale.y,
     rotate: s.rotate,
-    paddingwidth: s.paddingModules,
-    paddingheight: Math.round(s.paddingModules / 2),
+    ...quietZone(s),
     barcolor: hex(s.barcolor),
     textcolor: hex(s.textcolor),
   };

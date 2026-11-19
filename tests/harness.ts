@@ -148,3 +148,43 @@ export function degrade(
   }
   return { data, width: W, height: H };
 }
+
+/**
+ * Render a format as the Barcode tab shows it: the generator's own image
+ * (with its own quiet zone and background) sitting on the page, whose colour
+ * comes right up to it. `page` is the page colour as a grey level (the app's
+ * light theme is about 232, its dark theme about 22).
+ */
+export async function renderOnPage(
+  bcid: string,
+  page: number,
+  scale = 3,
+  text?: string,
+  settings: Partial<ReturnType<typeof defaultState>['barcode']> = {},
+): Promise<Img> {
+  const sym = bwip.symbolList.find((s) => s.bcid === bcid)!;
+  const opts = buildBwipOptions(
+    { ...defaultState().barcode, ...settings, bcid },
+    text ?? sym.text,
+    { x: scale, y: scale },
+    12,
+    defaultOptionString(sym.opts),
+  );
+  const png = PNG.sync.read(await bwip.toBuffer(opts as never));
+  const m = 30;
+  const width = png.width + m * 2;
+  const height = png.height + m * 2;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = page;
+    data[i * 4 + 3] = 255;
+  }
+  for (let y = 0; y < png.height; y++)
+    for (let x = 0; x < png.width; x++) {
+      const s = (y * png.width + x) * 4;
+      const d = ((y + m) * width + x + m) * 4;
+      const a = png.data[s + 3] / 255;
+      for (let c = 0; c < 3; c++) data[d + c] = png.data[s + c] * a + page * (1 - a);
+    }
+  return { data, width, height };
+}

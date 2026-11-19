@@ -335,6 +335,9 @@ export function buildScanPanel(ctx: PanelContext): {
   function stopCamera() {
     cameraToken++;
     running = false;
+    // Keep the outline only on a frozen frame that shows the find.
+    if (!viewport.classList.contains('frozen'))
+      overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
     viewport.classList.remove('live');
     clearTimeout(timer);
     stream?.getTracks().forEach((t) => t.stop());
@@ -498,6 +501,14 @@ export function buildScanPanel(ctx: PanelContext): {
     }
   };
   document.addEventListener('paste', onPaste);
+  // Don't keep the camera (and its light) on while the app is in the background.
+  const onHidden = () => {
+    if (document.hidden && running) {
+      stopCamera();
+      status.textContent = 'Camera stopped while the app was in the background.';
+    }
+  };
+  document.addEventListener('visibilitychange', onHidden);
 
   // ---------- controls ----------
   const lookOptions: ComboOption[] = [
@@ -688,6 +699,7 @@ export function buildScanPanel(ctx: PanelContext): {
     dispose: () => {
       stopCamera();
       document.removeEventListener('paste', onPaste);
+      document.removeEventListener('visibilitychange', onHidden);
     },
   };
 }

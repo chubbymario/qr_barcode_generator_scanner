@@ -915,7 +915,8 @@ tr.blank td:nth-child(2) {
 }
 .scan-viewport {
   position: relative;
-  width: min(100%, 720px);
+  /* Fits a phone held sideways too: never taller than most of the screen. */
+  width: min(100%, 720px, calc(75dvh * 4 / 3));
   aspect-ratio: 4 / 3;
   justify-self: center;
   border-radius: 10px;
@@ -1196,6 +1197,8 @@ tr.blank td:nth-child(2) {
   }
   .sheet {
     --frame: 260px;
+    /* Leave room for the size marks either side (they sit 30px outside). */
+    width: min(calc(100% - 40px), var(--frame));
   }
   .pair,
   .grid-2 {
@@ -1378,6 +1381,10 @@ dialog.licences::backdrop {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: 0 10px 24px rgb(10 15 22 / 0.18);
+}
+.combo.up .combo-list {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 .combo-group {
   padding: 8px 10px 4px;

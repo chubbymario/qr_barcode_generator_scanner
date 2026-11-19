@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../src/scan/zxing', async () => (await import('./harness')).zxingMock());
 vi.mock('../src/barcode/render', async () => (await import('./harness')).bwipMock());
 const { scanImage } = await import('../src/scan/engine');
-const { renderFormat, sampleText, degrade } = await import('./harness');
+const { renderFormat, renderOnPage, sampleText, degrade } = await import('./harness');
 const { SCANNABLE, PICK_ONLY } = await import('../src/scan/targets');
 const { code39FullAscii, deutschePostOk, gs1CheckOk, mod43, pznOk } =
   await import('../src/scan/identify');
@@ -156,6 +156,126 @@ describe('fixes from the robustness testers', () => {
       { format: 'EAN13' },
     );
     expect(top).toMatchObject({ bcid: 'issn', text: '0311-175X 00 17' });
+  });
+});
+
+// The Barcode tab shows the code with only its own quiet zone, on the page's
+// colour (light grey, or nearly black in the dark theme). A screenshot or a
+// photo of the screen looks like this, not like a code on a white sheet.
+describe('as shown on the page', () => {
+  const PAGES = [
+    ['dark page', 22],
+    ['light page', 232],
+  ] as const;
+  it.each([...SCANNABLE].flatMap((id) => PAGES.map(([n, v]) => [id, n, v] as const)))(
+    '%s on a %s',
+    async (bcid, _, page) => {
+      const img = await renderOnPage(bcid, page);
+      const [p] = await scanImage(img as never, { lookFor: bcid });
+      expect(p, `${bcid}: nothing read`).toBeTruthy();
+      expect(norm(p.text)).toBe(norm(sampleText(bcid)));
+      if (PICK_ONLY.has(bcid) || bcid === 'gs1-cc') return;
+      const a = await scanImage(img as never, { lookFor: 'auto' });
+      const all = a.flatMap((r) => [r, ...(r.alternatives ?? [])]);
+      expect(all.some((x) => norm(x.text) === norm(sampleText(bcid)))).toBe(true);
+    },
+  );
+  it('MaxiCode with only a thin quiet zone, on a dark page', async () => {
+    for (const q of [1, 2]) {
+      const img = await renderOnPage('maxicode', 22, 3, undefined, { quietZone2D: q });
+      const [p] = await scanImage(img as never, { lookFor: 'maxicode' });
+      expect(p?.bcid, `quiet zone ${q}`).toBe('maxicode');
+      const [a] = await scanImage(img as never, { lookFor: 'auto' });
+      expect(a?.bcid, `quiet zone ${q}, Everything`).toBe('maxicode');
+    }
+  });
+  it('MaxiCode with size marks and a caption around it, as on the Barcode tab', async () => {
+    for (const page of [22, 232]) {
+      const img = await renderOnPage('maxicode', page, 3);
+      const set = (x: number, y: number, v: number) => {
+        if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
+        const i = (y * img.width + x) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      };
+      // Size marks 12 px outside the code's own image, and a line of "text" below it.
+      for (let x = 30; x < img.width - 30; x++) set(x, 18, 120);
+      for (let y = 30; y < img.height - 30; y++) set(18, y, 120);
+      for (let x = 60; x < img.width - 60; x += 7)
+        for (let y = img.height - 24; y < img.height - 14; y++)
+          for (let k = 0; k < 3; k++) set(x + k, y, 90);
+      const [p] = await scanImage(img as never, { lookFor: 'maxicode' });
+      expect(p?.bcid, `page ${page}`).toBe('maxicode');
+    }
+  });
+  it('2D quiet zones are measured in modules', async () => {
+    const { quietZone } = await import('../src/barcode/options');
+    const { defaultState } = await import('../src/state');
+    const b = defaultState().barcode;
+    expect(quietZone({ ...b, bcid: 'maxicode', quietZone2D: 4 })).toEqual({
+      paddingwidth: 16,
+      paddingheight: 16,
+    });
+    expect(quietZone({ ...b, bcid: 'qrcode', quietZone2D: 4 })).toEqual({
+      paddingwidth: 8,
+      paddingheight: 8,
+    });
+    expect(quietZone({ ...b, bcid: 'code128', paddingModules: 10 })).toEqual({
+      paddingwidth: 10,
+      paddingheight: 5,
+    });
+  });
+});
+
+describe('generator settings people actually use', () => {
+  const INVERT = { barcolor: '#FFFFFF', backgroundcolor: '#000000' };
+  it.each(['L', 'I', 'R'])('MaxiCode turned %s', async (rotate) => {
+    const img = await renderOnPage('maxicode', 232, 3, undefined, { rotate: rotate as 'L' });
+    expect((await scanImage(img as never, { lookFor: 'maxicode' }))[0]?.bcid).toBe('maxicode');
+  });
+  it.each([
+    'code128',
+    'ean13',
+    'code39',
+    'interleaved2of5',
+    'databaromni',
+    'code16k',
+    'postnet',
+    'msi',
+  ])('%s in white on black', async (bcid) => {
+    const img = await renderOnPage(bcid, 232, 3, undefined, INVERT);
+    const [a] = await scanImage(img as never, { lookFor: 'auto' });
+    expect(norm(a?.text ?? '')).toBe(norm(sampleText(bcid)));
+  });
+  it('an inverted DataBar composite is not read inside out (a different valid GTIN)', async () => {
+    const img = await renderOnPage('databarstackedomnicomposite', 232, 3, undefined, INVERT);
+    for (const r of await scanImage(img as never, { lookFor: 'auto' }))
+      expect(r.text.startsWith('(01)03612345678904')).toBe(true);
+  });
+  it.each(
+    ['R', 'L'].flatMap((rotate) =>
+      ['ean13composite', 'databaromnicomposite', 'gs1-128composite'].map((id) => [id, rotate]),
+    ),
+  )('%s turned %s keeps its 2D part', async (bcid, rotate) => {
+    const img = await renderOnPage(bcid, 232, 3, undefined, { rotate: rotate as 'L' });
+    const [p] = await scanImage(img as never, { lookFor: bcid });
+    expect(norm(p?.text ?? '')).toBe(norm(sampleText(bcid)));
+  });
+  it('several codes in one picture are all found, nothing else', async () => {
+    const parts = await Promise.all(
+      ['qrcode', 'maxicode', 'postnet', 'code128'].map((id) => renderOnPage(id, 232, 3)),
+    );
+    const W = parts.reduce((a, p) => a + p.width, 0);
+    const H = Math.max(...parts.map((p) => p.height));
+    const data = new Uint8ClampedArray(W * H * 4).fill(232);
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    let ox = 0;
+    for (const p of parts) {
+      for (let y = 0; y < p.height; y++)
+        data.set(p.data.subarray(y * p.width * 4, (y + 1) * p.width * 4), (y * W + ox) * 4);
+      ox += p.width;
+    }
+    const r = await scanImage({ data, width: W, height: H } as never, { lookFor: 'auto' });
+    expect(r.map((x) => x.bcid).sort()).toEqual(['code128', 'maxicode', 'postnet', 'qrcode']);
   });
 });
 

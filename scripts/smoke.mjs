@@ -429,6 +429,45 @@ try {
   const camStopped = await page.$eval('.scan-viewport', (v) => !v.classList.contains('live'));
   check(camStopped, 'Camera stops after a find');
 
+  // Keep scanning, then stop by hand: the outline must go with the picture.
+  await page.evaluate(() =>
+    [...document.querySelectorAll('label')]
+      .find((l) => l.textContent.includes('Keep scanning after a find'))
+      .querySelector('input')
+      .click(),
+  );
+  const clickButton = (label) =>
+    page.evaluate((l) => {
+      [...document.querySelectorAll('button')]
+        .find((x) => x.textContent === l && !x.hidden)
+        ?.click();
+    }, label);
+  await clickButton('Scan again');
+  await clickButton('Start camera');
+  await page.waitForFunction(
+    () => {
+      const c = document.querySelector('.scan-overlay');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) return true;
+      return false;
+    },
+    { timeout: 20000 },
+  );
+  await clickButton('Stop camera');
+  await settle();
+  const overlayBlank = await page.$eval('.scan-overlay', (c) => {
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i]) return false;
+    return true;
+  });
+  check(overlayBlank, 'Stopping the camera removes the code outline');
+  await page.evaluate(() =>
+    [...document.querySelectorAll('label')]
+      .find((l) => l.textContent.includes('Keep scanning after a find'))
+      .querySelector('input')
+      .click(),
+  );
+
   // ---------- Mobile + dark ----------
   await page.click('#tab-qr');
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
@@ -446,6 +485,68 @@ try {
     check(w[0] <= w[1], `Phone layout of the ${tab} tab fits the screen (${w[0]} ≤ ${w[1]} px)`);
   }
   await shot('6a-mobile-scan');
+  // A tap on a menu item must not also press what's underneath once the menu
+  // closes (the browser's click follows the tap at the same spot).
+  let dialogs = 0;
+  const onDialog = (d) => {
+    dialogs++;
+    void d.dismiss();
+  };
+  page.on('dialog', onDialog);
+  const tapThrough = await page.evaluate(async () => {
+    const input = document.querySelector('#scan-format');
+    const r0 = input.getBoundingClientRect();
+    const ev = (type, el, x, y) =>
+      el.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    ev('pointerdown', input, r0.x + 5, r0.y + 5);
+    await new Promise((r) => setTimeout(r, 100));
+    const li = [...document.querySelectorAll('.combo-option')].find((o) =>
+      o.textContent.startsWith('Code 128'),
+    );
+    li.scrollIntoView({ block: 'center' });
+    const r = li.getBoundingClientRect();
+    const x = r.x + 10;
+    const y = r.y + r.height / 2;
+    ev('pointerdown', li, x, y);
+    ev('pointerup', li, x, y);
+    // What the browser does next: a click on whatever is now at that spot.
+    // In the reported case that was "Reset all settings"; send it there.
+    const under = [...document.querySelectorAll('footer button')].find(
+      (b) => b.textContent === 'Reset all settings',
+    );
+    under?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    return {
+      value: document.querySelector('#scan-format').value,
+      under: under?.textContent?.slice(0, 30),
+    };
+  });
+  page.off('dialog', onDialog);
+  check(
+    tapThrough.value === 'Code 128' && dialogs === 0,
+    `Tapping a menu item doesn't press what's beneath it (picked ${tapThrough.value}; beneath: "${tapThrough.under}"; dialogs: ${dialogs})`,
+  );
+  // And a normal click on it afterwards still works (the guard is one-off).
+  await new Promise((r) => setTimeout(r, 900));
+  page.on('dialog', onDialog);
+  await page.evaluate(() =>
+    [...document.querySelectorAll('footer button')]
+      .find((b) => b.textContent === 'Reset all settings')
+      .click(),
+  );
+  await settle();
+  page.off('dialog', onDialog);
+  check(dialogs === 1, `The button beneath still works on its own click (${dialogs} dialog)`);
   await page.evaluate(() =>
     [...document.querySelectorAll('footer button')]
       .find((b) => b.textContent === 'Licences')

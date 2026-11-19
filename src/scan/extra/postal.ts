@@ -12,6 +12,8 @@ export interface BarRead {
   sure?: boolean;
   /** Mean bar height over mean bar width: real postal bars are tall and thin. */
   aspect?: number;
+  /** Rows the bars cover, top to bottom. */
+  extent?: [number, number];
   spaceToBar: number; // mean space width / mean bar width
 }
 
@@ -86,7 +88,34 @@ export function statesFromRaw(
 }
 
 /** Find a row of evenly spaced bars and measure each bar's top and bottom. */
-export function readBars(l: Luma, minBars = 10): BarRead | null {
+/**
+ * Readings from up to six different bands of the image: the row with the
+ * most bars isn't always the code (a line of printed text, an address
+ * beside a postal code, can have more). Bands whose "bars" are no taller
+ * than they are wide (text) are left out.
+ */
+export function readBarsCandidates(l: Luma, minBars = 10): BarRead[] {
+  const skip = new Uint8Array(l.height);
+  const out: BarRead[] = [];
+  for (let k = 0; k < 6; k++) {
+    const info: { y?: number } = {};
+    const r = readBars(l, minBars, skip, info);
+    if (info.y === undefined || info.y < 0) break;
+    // Text has short, roundish strokes; bars are tall and thin.
+    if (r && (r.aspect ?? 0) >= 1.5) out.push(r);
+    // Skip this band next time: the bar extent if read, else a few rows.
+    const [a, b] = r?.extent ?? [info.y - 4, info.y + 4];
+    for (let y = Math.max(0, a); y <= Math.min(l.height - 1, b); y++) skip[y] = 1;
+  }
+  return out;
+}
+
+export function readBars(
+  l: Luma,
+  minBars = 10,
+  skip?: Uint8Array,
+  info?: { y?: number },
+): BarRead | null {
   // Threshold per row (the code may cover only part of the image), then use
   // the best row's threshold for measuring bar heights.
   const thresholds: (number | null)[] = [];
@@ -106,11 +135,12 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
       }
     }
     counts[y] = c;
-    if (c > bestCount) {
+    if (c > bestCount && !skip?.[y]) {
       bestCount = c;
       bestY = y;
     }
   }
+  if (info) info.y = bestY;
   if (bestCount < minBars) return null;
   const t = thresholds[bestY]!;
   const dark = (x: number, y: number) => l.data[y * l.width + x] < t;
@@ -216,7 +246,13 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
   const conf = { sure: true };
   const states = classify(tops, bottoms, true, conf);
   const aspect = mean(tops.map((t, i) => bottoms[i] - t + 1)) / wMean;
-  return { states, spaceToBar: mean(gaps) / wMean, sure: conf.sure, aspect };
+  return {
+    states,
+    spaceToBar: mean(gaps) / wMean,
+    sure: conf.sure,
+    aspect,
+    extent: [Math.min(...tops), Math.max(...bottoms)],
+  };
 }
 
 const flip = (s: string) =>

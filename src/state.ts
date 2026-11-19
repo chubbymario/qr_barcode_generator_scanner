@@ -61,7 +61,8 @@ export interface BarcodeSettings {
   transparentBackground: boolean;
   heightMm: number; // bar height for linear symbols
   rotate: 'N' | 'R' | 'L' | 'I';
-  paddingModules: number;
+  paddingModules: number; // quiet zone of 1D and stacked codes, in modules
+  quietZone2D: number; // quiet zone of 2D codes, in modules on every side
   showborder: boolean;
 }
 
@@ -199,6 +200,7 @@ export function defaultState(): AppState {
       heightMm: 15,
       rotate: 'N',
       paddingModules: 10,
+      quietZone2D: 4,
       showborder: false,
     },
     export: {

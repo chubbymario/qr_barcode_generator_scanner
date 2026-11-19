@@ -194,14 +194,17 @@ export function segmentsWithGaps(runs: Runs): Segment[] {
     if (start > 0 && runs.length - start >= 3)
       out.push({ runs: runs.slice(start), before: runs[start - 1], after: trail });
   }
-  // A frame drawn around some codes (e.g. Pharmacode) shows up as a thin bar
-  // and a wide gap at each end: also try without it.
-  if (runs.length > 7 && runs[1] > median * 3 && runs[runs.length - 2] > median * 3) {
-    out.push({
-      runs: runs.slice(2, runs.length - 2),
-      before: runs[1],
-      after: runs[runs.length - 2],
-    });
+  // A frame drawn around some codes (e.g. Pharmacode), or a dark page or
+  // desk beyond a thin quiet zone, shows up as a bar and a wide gap at each
+  // end: also try without them, one and two layers deep.
+  for (let k = 2; k <= 4 && runs.length > k * 2 + 3; k += 2) {
+    if (runs[k - 1] > median * 3 && runs[runs.length - k] > median * 3)
+      out.push({
+        runs: runs.slice(k, runs.length - k),
+        before: runs[k - 1],
+        after: runs[runs.length - k],
+      });
+    else break;
   }
   const seen = new Set<string>();
   return out.filter(({ runs: s }) => {

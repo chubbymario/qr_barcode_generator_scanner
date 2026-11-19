@@ -41,6 +41,27 @@ function score(o: ComboOption, q: string): number {
   return 10;
 }
 
+/**
+ * Cancel the click a browser sends after a tap, if it comes (within 500 ms,
+ * near the tap). Anything else still gets through, so a genuine next tap
+ * elsewhere isn't lost if the browser never sends one.
+ */
+function swallowNextClick(x: number, y: number) {
+  const stop = (e: MouseEvent) => {
+    if (Math.hypot(e.clientX - x, e.clientY - y) > 30) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    done();
+  };
+  const done = () => {
+    clearTimeout(timer);
+    window.removeEventListener('click', stop, true);
+  };
+  window.addEventListener('click', stop, true);
+  const timer = setTimeout(done, 500);
+}
+
 export function combobox(opts: {
   options: ComboOption[];
   value: string;
@@ -120,6 +141,10 @@ export function combobox(opts: {
       li.addEventListener('pointerup', (e) => {
         if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 10) {
           e.preventDefault();
+          // The browser follows a tap with a click at the same spot. The list
+          // closes now, so that click would land on whatever was underneath
+          // (e.g. "Reset all settings"): swallow it.
+          swallowNextClick(e.clientX, e.clientY);
           pick(o.value);
         }
         downAt = null;
@@ -149,9 +174,21 @@ export function combobox(opts: {
 
   // Where the list was scrolled when it was last closed without a choice.
   let savedScroll: number | null = null;
+  // Open downwards, or upwards when the box is near the bottom of the screen,
+  // and never taller than the space there is.
+  function place() {
+    const r = input.getBoundingClientRect();
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    const below = vh - r.bottom - 8;
+    const above = r.top - 8;
+    const up = below < 220 && above > below;
+    root.classList.toggle('up', up);
+    list.style.maxHeight = `${Math.max(120, Math.min(360, up ? above : below))}px`;
+  }
   function open(query = '') {
     render(query);
     list.hidden = false;
+    place();
     input.setAttribute('aria-expanded', 'true');
     if (query) return;
     if (savedScroll !== null) list.scrollTop = savedScroll;
