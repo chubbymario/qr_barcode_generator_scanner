@@ -33,7 +33,8 @@ const QR = ['QRCode'];
 const DM = ['DataMatrix'];
 const PDF = ['PDF417', 'CompactPDF417'];
 const AZ = ['Aztec'];
-const C39 = ['Code39'];
+// Plain Code 39: the app works out check characters and full ASCII itself (identify.ts).
+const C39 = ['Code39Std'];
 const ITF = ['ITF', 'ITF14'];
 const EAN13 = ['EAN13', 'ISBN'];
 const DATABAR = ['DataBar'];
@@ -58,7 +59,7 @@ export const ZX_TARGETS: Record<string, ZxTarget> = {
   code39ext: { formats: C39 },
   code32: { formats: ['Code32'] },
   // zxing-cpp reports PZN as Code 39 with its '-' prefix.
-  pzn: { formats: ['Code39', 'PZN'], accept: (r) => r.format === 'PZN' || r.text.startsWith('-') },
+  pzn: { formats: C39, accept: (r) => r.format === 'PZN' || r.text.startsWith('-') },
   code93: { formats: ['Code93'] },
   code93ext: { formats: ['Code93'] },
   interleaved2of5: { formats: ITF },
@@ -103,8 +104,7 @@ export const ZX_TARGETS: Record<string, ZxTarget> = {
   aztecrune: { formats: [...AZ, 'AztecRune'] },
   hibcazteccode: { formats: AZ, accept: hibc },
   maxicode: { formats: ['MaxiCode'] },
-  // Plain Code 39, so HIBC's '/' and '$' aren't taken as Code 39 Extended escapes.
-  hibccode39: { formats: ['Code39Std'], accept: hibc },
+  hibccode39: { formats: C39, accept: hibc },
   hibccode128: { formats: ['Code128'], accept: hibc },
 };
 

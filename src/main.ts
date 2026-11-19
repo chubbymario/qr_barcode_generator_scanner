@@ -15,6 +15,7 @@ import { buildBatchPanel } from './batch/panel';
 import { buildPrintPanel } from './print/panel';
 import { buildScanPanel } from './scan/panel';
 import { buildStage } from './ui/stage';
+import { licenceBlocks } from './ui/licence-text';
 import { barcodeGenerator, getSymbols, qrGenerator } from './generators';
 import { button, debounce, h, toast } from './ui/dom';
 
@@ -198,7 +199,7 @@ const licenceDialog = h(
   'dialog',
   { class: 'licences', 'aria-labelledby': 'licences-title' },
   h('div', { class: 'dialog-head' }, h('h2', { id: 'licences-title' }, 'Licences')),
-  h('pre', { class: 'licence-text' }, 'Loading…'),
+  h('div', { class: 'licence-text' }, 'Loading…'),
 );
 const closeLicences = button('Close', () => licenceDialog.close(), { kind: 'plain' });
 licenceDialog.querySelector('.dialog-head')!.append(
@@ -218,7 +219,7 @@ licenceDialog.addEventListener('click', (e) => e.target === licenceDialog && lic
 document.body.append(licenceDialog);
 async function showLicences() {
   licenceDialog.showModal();
-  const pre = licenceDialog.querySelector('pre')!;
+  const pre = licenceDialog.querySelector<HTMLElement>('.licence-text')!;
   try {
     const [own, third] = await Promise.all([
       fetch(`${import.meta.env.BASE_URL}LICENSE.txt`).then((r) => (r.ok ? r.text() : '')),
@@ -227,7 +228,9 @@ async function showLicences() {
         return r.text();
       }),
     ]);
-    pre.textContent = `${own ? `QR & Barcode Studio\n\n${own.trim()}\n\n\n` : ''}${third}`;
+    pre.replaceChildren(
+      ...licenceBlocks(`${own ? `QR & Barcode Studio\n\n${own.trim()}\n\n\n` : ''}${third}`),
+    );
   } catch {
     pre.textContent = 'The licence file couldn’t be loaded. Check your connection and try again.';
   }

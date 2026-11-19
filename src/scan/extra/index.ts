@@ -18,7 +18,7 @@ import { decodeStacked, STACKED_FORMATS } from './stacked';
 import type { BwipRaw, ExtraResult } from './types';
 
 export type { BwipRaw, ExtraResult } from './types';
-export { lumaFromRgba, type Luma } from './lines';
+export { deskew, lumaFromRgba, type Luma } from './lines';
 export { decodeStacked, collectStacked, finishStacked } from './stacked';
 export { collectCca, decodeCca } from './cca';
 

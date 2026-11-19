@@ -86,7 +86,9 @@ export function combobox(opts: {
     list.replaceChildren();
     let lastGroup: string | undefined;
     for (const { o } of scored) {
-      if (seen.has(o.value)) continue;
+      // Searching lists each format once; browsing shows it under every
+      // group it belongs to (e.g. "Popular" and its own category).
+      if (q && seen.has(o.value)) continue;
       seen.add(o.value);
       if (!q && o.group !== lastGroup && o.group) {
         list.append(h('li', { class: 'combo-group', role: 'presentation' }, o.group));
@@ -105,26 +107,35 @@ export function combobox(opts: {
         h('span', {}, o.label),
         o.note ? h('span', { class: 'combo-note' }, o.note) : null,
       );
-      // pointerdown, so the choice lands before the input loses focus.
+      // Chosen on click, so scrolling the list with a finger never picks
+      // anything; mousedown is cancelled so the text box keeps focus.
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('click', () => pick(o.value));
+      // Touch: a tap is a press and release without moving (a scroll is
+      // cancelled by the browser before it gets here).
+      let downAt: [number, number] | null = null;
       li.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        pick(o.value);
+        downAt = e.pointerType === 'mouse' ? null : [e.clientX, e.clientY];
       });
+      li.addEventListener('pointerup', (e) => {
+        if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 10) {
+          e.preventDefault();
+          pick(o.value);
+        }
+        downAt = null;
+      });
+      li.addEventListener('pointercancel', () => (downAt = null));
       list.append(li);
     }
     if (!shown.length)
       list.append(h('li', { class: 'combo-empty', role: 'presentation' }, 'No matches'));
-    setActive(
-      q
-        ? 0
-        : Math.max(
-            0,
-            shown.findIndex((o) => o.value === value),
-          ),
-    );
+    // The current choice in its own category (the last place it's listed).
+    let current = -1;
+    shown.forEach((o, i) => o.value === value && (current = i));
+    setActive(q ? 0 : Math.max(0, current), false);
   }
 
-  function setActive(i: number) {
+  function setActive(i: number, scroll = true) {
     active = shown.length ? Math.max(0, Math.min(shown.length - 1, i)) : -1;
     list
       .querySelectorAll('.combo-option')
@@ -132,16 +143,26 @@ export function combobox(opts: {
     if (active >= 0) {
       const el = document.getElementById(`${listId}-${active}`);
       input.setAttribute('aria-activedescendant', `${listId}-${active}`);
-      el?.scrollIntoView({ block: 'nearest' });
+      if (scroll) el?.scrollIntoView({ block: 'nearest' });
     } else input.removeAttribute('aria-activedescendant');
   }
 
+  // Where the list was scrolled when it was last closed without a choice.
+  let savedScroll: number | null = null;
   function open(query = '') {
     render(query);
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
+    if (query) return;
+    if (savedScroll !== null) list.scrollTop = savedScroll;
+    else {
+      // Show the current choice in the middle of the list.
+      const el = active >= 0 ? document.getElementById(`${listId}-${active}`) : null;
+      if (el) list.scrollTop = el.offsetTop - (list.clientHeight - el.offsetHeight) / 2;
+    }
   }
   function close(restore = true) {
+    if (!list.hidden && input.value === labelOf(value)) savedScroll = list.scrollTop;
     list.hidden = true;
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
@@ -152,24 +173,56 @@ export function combobox(opts: {
     value = v;
     input.value = labelOf(v);
     close(false);
+    savedScroll = null;
     if (changed) opts.onChange(v);
   }
   root.choose = pick;
 
   // Focus alone (including focus restored after the page redraws) only
-  // selects the text; the list opens on a click, typing or the arrow keys.
+  // selects the text; the list opens on a press, typing or the arrow keys.
   input.addEventListener('focus', () => input.select());
-  // Pressing on the closed box opens the list with the text selected, ready
-  // to type over. (Done on mousedown so the click can't collapse the selection.)
-  input.addEventListener('mousedown', (e) => {
-    if (!list.hidden) return;
+  // Pressing on the closed box opens the list. With a mouse the text is
+  // selected, ready to type over; with a finger the list opens without the
+  // keyboard (tap the box again to type a search).
+  const openFromPointer = (e: PointerEvent) => {
     e.preventDefault();
-    input.focus();
-    input.select();
+    if (e.pointerType === 'mouse') {
+      input.focus();
+      input.select();
+    }
     open();
+  };
+  input.addEventListener('pointerdown', (e) => {
+    if (list.hidden) openFromPointer(e);
   });
   input.addEventListener('input', () => open(input.value));
-  input.addEventListener('blur', () => close());
+  // While the pointer is down inside the list (dragging its scrollbar, say),
+  // losing focus doesn't close it.
+  let pressingList = false;
+  list.addEventListener('pointerdown', () => (pressingList = true));
+  const release = (e: PointerEvent) => {
+    if (!pressingList) return;
+    pressingList = false;
+    if (e.pointerType === 'mouse' && !list.hidden && document.activeElement !== input)
+      input.focus({ preventScroll: true });
+  };
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
+  input.addEventListener('blur', () => {
+    if (!pressingList) close();
+  });
+  // A press anywhere else closes the list (needed when it was opened by touch,
+  // without focus).
+  const outside = (e: PointerEvent) => {
+    if (!root.isConnected) {
+      document.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      return;
+    }
+    if (!list.hidden && !root.contains(e.target as Node)) close();
+  };
+  document.addEventListener('pointerdown', outside, true);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -191,11 +244,11 @@ export function combobox(opts: {
     }
   });
   toggle.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    if (list.hidden) {
-      input.focus();
-      open();
-    } else close();
+    if (list.hidden) openFromPointer(e);
+    else {
+      e.preventDefault();
+      close();
+    }
   });
 
   // Let field() link its <label> and hint to the input.

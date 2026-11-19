@@ -330,3 +330,89 @@ export function normaliseSbs(sbs: number[]): number[] {
 
 export const same = (a: number[], b: number[]) =>
   a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * Tilt of the dominant edges in degrees, in [-45, 45): bars (and stacked rows)
+ * leaning by this much. Edges at right angles count as the same direction, so
+ * bar sides and bar tops agree. Measured on a reduced copy to stay fast.
+ * Returns 0 when there's no clear direction.
+ */
+export function skewAngle(l: Luma, fold = 4): number {
+  const step = Math.max(1, Math.round(Math.max(l.width, l.height) / 480));
+  let c = 0;
+  let s = 0;
+  let total = 0;
+  const at = (x: number, y: number) => l.data[y * l.width + x];
+  for (let y = step; y < l.height - step; y += step) {
+    for (let x = step; x < l.width - step; x += step) {
+      const gx =
+        at(x + step, y - step) +
+        2 * at(x + step, y) +
+        at(x + step, y + step) -
+        at(x - step, y - step) -
+        2 * at(x - step, y) -
+        at(x - step, y + step);
+      const gy =
+        at(x - step, y + step) +
+        2 * at(x, y + step) +
+        at(x + step, y + step) -
+        at(x - step, y - step) -
+        2 * at(x, y - step) -
+        at(x + step, y - step);
+      const m = gx * gx + gy * gy;
+      if (m < 40000) continue; // weak edge
+      const a = Math.atan2(gy, gx) * fold;
+      c += m * Math.cos(a);
+      s += m * Math.sin(a);
+      total += m;
+    }
+  }
+  if (!total || Math.hypot(c, s) / total < 0.25) return 0;
+  return (Math.atan2(s, c) / fold) * (180 / Math.PI);
+}
+
+/** Rotate by `deg` degrees (positive = counter-clockwise) about the centre, same size, white outside. */
+export function rotateBy(l: Luma, deg: number): Luma {
+  const a = (deg * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const out = new Uint8Array(l.width * l.height);
+  const cx = l.width / 2;
+  const cy = l.height / 2;
+  for (let y = 0; y < l.height; y++) {
+    for (let x = 0; x < l.width; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const sx = cx + dx * cos - dy * sin;
+      const sy = cy + dx * sin + dy * cos;
+      const x0 = Math.floor(sx);
+      const y0 = Math.floor(sy);
+      if (x0 < 0 || y0 < 0 || x0 >= l.width - 1 || y0 >= l.height - 1) {
+        out[y * l.width + x] = 255;
+        continue;
+      }
+      const fx = sx - x0;
+      const fy = sy - y0;
+      const i = y0 * l.width + x0;
+      out[y * l.width + x] =
+        (l.data[i] * (1 - fx) + l.data[i + 1] * fx) * (1 - fy) +
+        (l.data[i + l.width] * (1 - fx) + l.data[i + l.width + 1] * fx) * fy;
+    }
+  }
+  return { data: out, width: l.width, height: l.height };
+}
+
+/** The image straightened so its bars stand upright, or null if it's already straight. */
+export function deskew(l: Luma): Luma | null {
+  let a = skewAngle(l);
+  if (Math.abs(a) < 0.8) return null;
+  // The estimate runs a little short on blurry edges: measure what's left and correct.
+  let out = rotateBy(l, a);
+  for (let pass = 0; pass < 2; pass++) {
+    const rest = skewAngle(out);
+    if (Math.abs(rest) < 0.25) break;
+    a += rest;
+    out = rotateBy(l, a);
+  }
+  return out;
+}

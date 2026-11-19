@@ -1,42 +1,14 @@
 // The scanner as a whole (scanImage): per-format scanning, and no reads from
 // things that aren't barcodes, in every mode. Runs zxing-cpp from node_modules
 // and bwip-js's Node build in place of the browser loaders.
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import bwip from 'bwip-js/node';
 import { PNG } from 'pngjs';
-import { prepareZXingModule, readBarcodes, type ReaderOptions } from 'zxing-wasm/reader';
 import { buildBwipOptions, defaultOptionString } from '../src/barcode/options';
 import { defaultState } from '../src/state';
 
-vi.mock('../src/scan/zxing', () => {
-  const require = createRequire(import.meta.url);
-  const wasm = readFileSync(require.resolve('zxing-wasm/reader/zxing_reader.wasm'));
-  let ready: Promise<unknown> | null = null;
-  return {
-    readWithZxing: async (image: ImageData, opts: Partial<ReaderOptions> = {}) => {
-      ready ??= Promise.resolve(
-        prepareZXingModule({
-          overrides: { wasmBinary: wasm.buffer as ArrayBuffer },
-          fireImmediately: true,
-        }),
-      );
-      await ready;
-      const r = await readBarcodes(image, {
-        tryHarder: true,
-        tryRotate: true,
-        tryInvert: true,
-        tryDownscale: true,
-        eanAddOnSymbol: 'Read',
-        maxNumberOfSymbols: 8,
-        ...opts,
-      });
-      return r.filter((x) => x.isValid && x.text !== '');
-    },
-  };
-});
-vi.mock('../src/barcode/render', () => ({ loadBwip: async () => ({ default: bwip }) }));
+vi.mock('../src/scan/zxing', async () => (await import('./harness')).zxingMock());
+vi.mock('../src/barcode/render', async () => (await import('./harness')).bwipMock());
 
 const { scanImage } = await import('../src/scan/engine');
 const { SCANNABLE, PICK_ONLY, ZX_TARGETS } = await import('../src/scan/targets');

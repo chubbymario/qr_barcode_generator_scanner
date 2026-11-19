@@ -435,6 +435,33 @@ try {
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
   await settle();
   await shot('6-mobile-dark');
+  // Nothing but the tab row may scroll sideways on a phone.
+  for (const tab of ['qr', 'barcode', 'batch', 'print', 'scan']) {
+    await page.click(`#tab-${tab}`);
+    await settle();
+    const w = await page.evaluate(() => [
+      document.documentElement.scrollWidth,
+      document.documentElement.clientWidth,
+    ]);
+    check(w[0] <= w[1], `Phone layout of the ${tab} tab fits the screen (${w[0]} ≤ ${w[1]} px)`);
+  }
+  await shot('6a-mobile-scan');
+  await page.evaluate(() =>
+    [...document.querySelectorAll('footer button')]
+      .find((b) => b.textContent === 'Licences')
+      .click(),
+  );
+  await page.waitForFunction(() => document.querySelectorAll('.licence-text p').length > 20, {
+    timeout: 10000,
+  });
+  const lw = await page.$eval('.licence-text', (e) => [e.scrollWidth, e.clientWidth]);
+  check(
+    lw[0] <= lw[1],
+    `Licences fit a phone screen without sideways scrolling (${lw[0]} ≤ ${lw[1]})`,
+  );
+  await shot('6b-mobile-licences');
+  await page.keyboard.press('Escape');
+  await page.click('#tab-qr');
 
   // ---------- Footer: licences, clear cache ----------
   await page.setViewport({ width: 1280, height: 900 });

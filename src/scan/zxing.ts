@@ -3,6 +3,7 @@
 
 import wasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import type { ReadResult, ReaderOptions } from 'zxing-wasm/reader';
+import { ZXING_DEFAULTS } from './zxing-defaults';
 
 type Zxing = typeof import('zxing-wasm/reader');
 let loading: Promise<Zxing> | null = null;
@@ -26,15 +27,7 @@ export async function readWithZxing(
   opts: Partial<ReaderOptions> = {},
 ): Promise<ReadResult[]> {
   const z = await loadZxing();
-  const results = await z.readBarcodes(image, {
-    tryHarder: true,
-    tryRotate: true,
-    tryInvert: true,
-    tryDownscale: true,
-    eanAddOnSymbol: 'Read',
-    maxNumberOfSymbols: 8,
-    ...opts,
-  });
+  const results = await z.readBarcodes(image, { ...ZXING_DEFAULTS, ...opts });
   return results.filter((r) => r.isValid && r.text !== '');
 }
 

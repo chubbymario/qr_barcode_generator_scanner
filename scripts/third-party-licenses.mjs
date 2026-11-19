@@ -32,11 +32,11 @@ for (const [key, name] of [...seen.entries()].sort()) {
   const texts = licenseFiles.map((f) => readFileSync(join(dir, f), 'utf8').trim());
   sections.push(
     [
-      '='.repeat(72),
+      '-'.repeat(40),
       `${key}`,
       `License: ${typeof pkg.license === 'string' ? pkg.license : JSON.stringify(pkg.license ?? 'see below')}`,
       pkg.homepage ? `Homepage: ${pkg.homepage}` : null,
-      '='.repeat(72),
+      '-'.repeat(40),
       texts.join('\n\n') || '(No licence file included in the package.)',
     ]
       .filter(Boolean)
@@ -48,12 +48,12 @@ for (const [key, name] of [...seen.entries()].sort()) {
 // Apache-2.0 licensed; its licence text isn't in the npm package, so add it.
 sections.push(
   [
-    '='.repeat(72),
+    '-'.repeat(40),
     'zxing-cpp (compiled into zxing_reader.wasm, shipped by zxing-wasm)',
     'License: Apache-2.0',
     'Homepage: https://github.com/zxing-cpp/zxing-cpp',
     'Copyright the ZXing authors and zxing-cpp contributors.',
-    '='.repeat(72),
+    '-'.repeat(40),
     readFileSync(join(root, 'scripts', 'licenses', 'apache-2.0.txt'), 'utf8').trim(),
   ].join('\n'),
 );

@@ -55,6 +55,7 @@ A QR code and barcode generator and scanner that runs entirely in your browser a
 - Optional beep and vibration, continuous scanning, and a history kept on the device (which you can turn off or clear).
 - The installed app has a "Scan a code" shortcut on a long-press of its icon.
 - Every format in the Barcode tab's list says whether the scanner can read it.
+- Works on phones: the page fits the screen (only the row of tabs scrolls sideways), format menus open without the keyboard on a tap (tap again to type a search), scrolling a menu never picks an item, and text boxes don't make iOS zoom in.
 
 ### What the scanner can read
 
@@ -74,7 +75,16 @@ Every QR code the QR code tab makes, with any style, logo or gradient, scans. Fo
 - **Quiet zones and agreement.** The app's 1D decoders only accept a read with blank space on both sides that 2 scan lines agree on (3 in "Everything").
 - **Camera confirmation.** On the camera, a read is only shown once it has turned up in several frames within 1.5 seconds: 1 frame for 2D codes and stacked codes with error correction, 2 for linear codes with a check digit, 3 for formats without one (Code 39, Codabar, ITF and the pick-only formats). zxing-cpp also needs 3 scan lines to cross a 1D code on a camera frame instead of 2.
 - **One format means one format.** Picking a format turns off every other decoder and checks the variant too: Swiss QR must start with `SPC`, HIBC codes with `+`, ISBN with 978 or 979, GS1 variants must carry GS1 data, and a composite pick needs the 2D part.
-- **Tests.** `tests/false-positives.test.ts` scans a desktop screenshot, camera noise, stripes and random bars in every mode and with every single-format setting, and expects nothing; it also checks every format's scanner reads its own code.
+- **Tests.** `tests/identify.test.ts` renders every readable format with the generator's defaults and checks the scanner names it and returns the typed data, in both modes, plus tilted and blurred photos of the postal codes, stacked codes, composites and MaxiCode. `tests/false-positives.test.ts` scans a desktop screenshot, camera noise, stripes and random bars in every mode and with every single-format setting, and expects nothing; it also checks every format's scanner reads its own code.
+
+**Formats that print the same bars.** Several formats are the same barcode with a different meaning: a UPC-A is an EAN-13 that starts with 0, an ISBN is an EAN-13 starting 978 or 979, ITF-14 and the Deutsche Post codes are Interleaved 2 of 5, PZN is Code 39 with a `-` in front. The scanner names the most likely one from the content (the prefix, the length, which check digit fits, the symbol's shape) and lists the others under **Could also be** on the result. When it's set to one format, it reads the code as that format. It also:
+
+- **Returns the data, not the extras.** Check characters (Code 39, Codabar, Interleaved 2 of 5) and ITF's padding 0 are removed and shown separately, so the result matches what was typed into the generator. The generator no longer prints check characters in the text under the bars either.
+- **Reads add-ons.** An ISBN's price or an ISSN's issue number (EAN-2/EAN-5 add-on) is read by the app's own decoder when zxing-cpp misses it, and the ISSN is rebuilt in its usual form (`0311-175X 00 17`).
+- **Decodes full ASCII itself.** Code 39 Extended and Code 93 Extended are recognised by their content, and HIBC codes by their `+` and check character, so `+A99…` isn't mistaken for Code 39 Extended.
+- **Edit in generator** loads the format and text that reproduce the same bars (an ISBN goes in as EAN-13 digits, since its hyphen positions can't be read from the bars).
+
+**Tilted and blurry photos.** zxing-cpp copes with tilt itself. For the app's own decoders the scanner measures how far the bars lean and straightens the image first, and the postal reader judges each bar against a line fitted through its neighbours, so a slight remaining tilt or a bar blurring into the text below doesn't matter. MaxiCode, which zxing-cpp only reads from clean upright images, is found by its bullseye, straightened and cut out before decoding.
 
 **How the app's own decoders work.**
 

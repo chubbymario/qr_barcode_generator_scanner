@@ -28,9 +28,11 @@ export function parseOptionString(input: string): Record<string, BwipValue> {
 
 /** Default "more options" for a symbol, minus the switches the UI already controls. */
 export function defaultOptionString(opts: string): string {
+  // "includecheckintext" would print the check character under the bars as if
+  // it were part of the data; the scanner returns the data without it.
   return opts
     .split(/\s+/)
-    .filter((t) => t && t !== 'includetext')
+    .filter((t) => t && t !== 'includetext' && t !== 'includecheckintext')
     .join(' ');
 }
 

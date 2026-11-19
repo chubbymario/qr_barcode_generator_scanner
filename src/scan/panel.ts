@@ -173,20 +173,22 @@ export function buildScanPanel(ctx: PanelContext): {
         ),
       );
     }
-    if (r.bcid) {
+    const editId = r.edit?.bcid ?? r.bcid;
+    const editText = r.edit?.text ?? r.text;
+    if (editId) {
       actions.push(
         button(
           'Edit in generator',
           () =>
             ctx.update(
               (s) => {
-                if (r.bcid === 'qrcode') {
+                if (editId === 'qrcode') {
                   s.qr.contentType = info.type;
                   s.qr.fields[info.type] = { ...s.qr.fields[info.type], ...info.fields };
                   s.tab = 'qr';
                 } else {
-                  s.barcode.bcid = r.bcid!;
-                  s.barcode.texts[r.bcid!] = r.text;
+                  s.barcode.bcid = editId;
+                  s.barcode.texts[editId] = editText;
                   s.tab = 'barcode';
                 }
               },
@@ -210,14 +212,34 @@ export function buildScanPanel(ctx: PanelContext): {
         h('h3', {}, r.label),
         r.engine === 'app' ? h('span', { class: 'tag' }, 'App decoder') : null,
       ),
-      info.summary.length
+      info.summary.length || r.details?.length
         ? h(
             'dl',
             {},
-            info.summary.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]),
+            [...(r.details ?? []), ...info.summary].flatMap(([k, v]) => [
+              h('dt', {}, k),
+              h('dd', {}, v),
+            ]),
           )
         : null,
       h('pre', { class: 'payload' }, visible),
+      r.alternatives?.length
+        ? h(
+            'details',
+            { class: 'alternatives' },
+            h('summary', {}, `Could also be ${r.alternatives.map((a) => a.label).join(', ')}`),
+            h(
+              'p',
+              { class: 'hint' },
+              'These formats print the same bars, so the scanner shows the most common reading. Pick the format under “Look for” to read it as that.',
+            ),
+            h(
+              'dl',
+              {},
+              r.alternatives.flatMap((a) => [h('dt', {}, a.label), h('dd', {}, a.text)]),
+            ),
+          )
+        : null,
       h('div', { class: 'actions' }, actions),
     );
   }

@@ -17,16 +17,42 @@ export interface BarRead {
  * happen to appear (a code with no tracker-only bars still classifies right).
  */
 function classify(tops: number[], bottoms: number[], upIsLess: boolean): string {
-  const hiEdge = upIsLess ? Math.min(...tops) : Math.max(...tops);
-  const loEdge = upIsLess ? Math.max(...bottoms) : Math.min(...bottoms);
-  const H = Math.abs(loEdge - hiEdge) || 1;
-  return tops
-    .map((t, i) => {
-      const asc = Math.abs(t - hiEdge) < 0.2 * H;
-      const desc = Math.abs(bottoms[i] - loEdge) < 0.2 * H;
-      return asc && desc ? 'F' : asc ? 'A' : desc ? 'D' : 'T';
-    })
-    .join('');
+  const dir = upIsLess ? 1 : -1;
+  // Work in "up is less" terms.
+  const T = tops.map((v) => v * dir);
+  const B = bottoms.map((v) => v * dir);
+  const pct = (v: number[], p: number) =>
+    [...v].sort((a, b) => a - b)[Math.round((v.length - 1) * p)];
+  const hi0 = pct(T, 0.1);
+  const lo0 = pct(B, 0.9);
+  const H0 = Math.abs(lo0 - hi0) || 1;
+  // Fit a straight line through the bars that reach each edge, so a slight
+  // remaining tilt doesn't matter. Percentiles (not extremes) pick the edges,
+  // because in a blurry photo a bar can run into the printed text below it.
+  const fit = (v: number[], ref: number) => {
+    const pts = v.map((y, i) => [i, y]).filter(([, y]) => Math.abs(y - ref) < 0.3 * H0);
+    if (pts.length < 3) return () => ref;
+    const n = pts.length;
+    const mx = pts.reduce((a, [x]) => a + x, 0) / n;
+    const my = pts.reduce((a, [, y]) => a + y, 0) / n;
+    let sxy = 0;
+    let sxx = 0;
+    for (const [x, y] of pts) {
+      sxy += (x - mx) * (y - my);
+      sxx += (x - mx) ** 2;
+    }
+    const k = sxx ? sxy / sxx : 0;
+    return (i: number) => my + k * (i - mx);
+  };
+  const hiAt = fit(T, hi0);
+  const loAt = fit(B, lo0);
+  return T.map((t, i) => {
+    const H = Math.abs(loAt(i) - hiAt(i)) || 1;
+    // Beyond the edge counts as reaching it.
+    const asc = t - hiAt(i) < 0.2 * H;
+    const desc = loAt(i) - B[i] < 0.2 * H;
+    return asc && desc ? 'F' : asc ? 'A' : desc ? 'D' : 'T';
+  }).join('');
 }
 
 /** Expected states for a code as bwip-js would draw it. */
@@ -81,10 +107,20 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
   while (y1 < l.height - 1 && counts[y1 + 1] === bestCount) y1++;
   const y = (y0 + y1) >> 1;
 
+  // Look a few rows either side too: after straightening a photo the thin
+  // tracker band can still drift by a pixel or two across a long code.
+  const band = Math.max(1, Math.min(3, (y1 - y0) >> 1));
+  const darkNear = (x: number) => {
+    for (let dy = -band; dy <= band; dy++) {
+      const yy = y + dy;
+      if (yy >= 0 && yy < l.height && dark(x, yy)) return true;
+    }
+    return false;
+  };
   const bars: [number, number][] = [];
   let start = -1;
   for (let x = 0; x <= l.width; x++) {
-    const d = x < l.width && dark(x, y);
+    const d = x < l.width && darkNear(x);
     if (d && start < 0) start = x;
     if (!d && start >= 0) {
       bars.push([start, x]);
@@ -104,7 +140,7 @@ export function readBars(l: Luma, minBars = 10): BarRead | null {
   const wMean = mean(widths);
   // Height-modulated codes have bars of one width; reject rows that don't.
   const wMedian = [...widths].sort((a, b) => a - b)[widths.length >> 1];
-  if (widths.some((w) => Math.abs(w - wMedian) > Math.max(1.5, wMedian * 0.35))) return null;
+  if (widths.some((w) => Math.abs(w - wMedian) > Math.max(2, wMedian * 0.5))) return null;
 
   const tops: number[] = [];
   const bottoms: number[] = [];

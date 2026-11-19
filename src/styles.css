@@ -73,6 +73,10 @@ body {
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  /* minmax(0, …) so nothing wide (the tab row, a long word) can stretch the
+     page past the screen; the tab row scrolls on its own instead. */
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: clip;
   background: var(--desk);
   color: var(--ink);
   font-family: var(--font);
@@ -1092,8 +1096,12 @@ tr.blank td:nth-child(2) {
 }
 .footer-links {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   align-items: center;
+}
+.footer > p {
+  min-width: 0;
 }
 
 .toast {
@@ -1148,8 +1156,10 @@ tr.blank td:nth-child(2) {
   .tabs {
     order: 3;
     width: calc(100% + 32px);
+    max-width: none;
     margin: 0 -16px;
     padding: 0 6px;
+    overscroll-behavior-x: contain;
   }
   .tabs [role='tab'] {
     font-size: 14px;
@@ -1168,7 +1178,7 @@ tr.blank td:nth-child(2) {
     padding: 6px 8px;
   }
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .controls,
   .stage {
@@ -1191,6 +1201,30 @@ tr.blank td:nth-child(2) {
   .grid-2 {
     grid-template-columns: 1fr;
   }
+}
+
+/* Phones and tablets: iOS zooms into any text box under 16px when it gets
+   focus, and leaves the page zoomed afterwards. */
+@media (pointer: coarse) {
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Long words (URLs, payloads) wrap instead of widening the page. */
+.field,
+.hint,
+.status,
+.scan-card,
+.scan-card dd,
+.payload,
+.history {
+  overflow-wrap: anywhere;
+}
+.payload {
+  white-space: pre-wrap;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1254,7 +1288,8 @@ tr.blank td:nth-child(2) {
   white-space: nowrap;
 }
 dialog.licences {
-  width: min(92vw, 820px);
+  width: min(94vw, 760px);
+  max-width: none;
   max-height: 86vh;
   padding: 0;
   border: 1px solid var(--line);
@@ -1281,12 +1316,24 @@ dialog.licences::backdrop {
 }
 .licence-text {
   margin: 0;
-  padding: 16px 18px;
+  padding: 16px 20px;
   max-height: calc(86vh - 62px);
-  overflow: auto;
-  white-space: pre-wrap;
-  font-size: 12.5px;
-  line-height: 1.45;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.licence-text p {
+  margin: 0 0 0.7em;
+}
+.licence-text p.indent {
+  margin: 0 0 0.3em 1.5em;
+}
+.licence-text hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.4em 0;
 }
 
 /* ---------- searchable dropdown ---------- */
@@ -1363,4 +1410,16 @@ dialog.licences::backdrop {
   padding: 8px 10px;
   color: var(--ink-2);
   font-size: 14px;
+}
+
+.scan-card .alternatives {
+  margin-top: 8px;
+  font-size: 14px;
+}
+.scan-card .alternatives summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.scan-card .alternatives dd {
+  overflow-wrap: anywhere;
 }
