@@ -1,10 +1,10 @@
 {
-  "name": "qr-barcode-generator",
-  "version": "1.0.0",
+  "name": "qr_barcode_generator_scanner",
+  "version": "1.1.0",
   "description": "Static QR code and barcode generator for GitHub Pages: styled QR codes with logos, 100+ barcode formats, batch export and label sheets.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/third-party-licenses.mjs",
+    "build": "npm run licenses && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node scripts/smoke.mjs",
-    "icons": "python3 scripts/make-icons.py"
+    "icons": "python3 scripts/make-icons.py",
+    "licenses": "node scripts/third-party-licenses.mjs",
+    "predev": "npm run licenses"
   },
   "license": "0BSD",
   "dependencies": {

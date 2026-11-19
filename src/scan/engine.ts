@@ -7,6 +7,16 @@
 // The 1 MB bwip-js encoder is only loaded when there's something to verify.
 
 import { readWithZxing, type ReadResult } from './zxing';
+import type { ReaderOptions } from 'zxing-wasm/reader';
+import {
+  AUTO_ZXING_FORMATS,
+  COMPOSITE_ALIASES,
+  compositeFormats,
+  framesNeeded,
+  SCANNABLE,
+  ZX_TARGETS,
+} from './targets';
+import { COMPOSITE_FORMATS } from './support';
 import { bcidForZxing, EXTRA_LABELS, zxingLabel } from './formats';
 import {
   collectCca,
@@ -28,17 +38,21 @@ export interface ScanResult {
   engine: 'zxing' | 'app';
   /** Corners in image pixels, when known. */
   corners?: { x: number; y: number }[];
+  /** Camera frames in a row that must agree before this read is shown. */
+  frames?: number;
 }
 
-/** "auto" = everything; "standard" = zxing only; otherwise a bwip-js id for one app-decoded format. */
+/** "auto" = everything; "standard" = zxing-cpp only; otherwise one format's bwip-js id. */
 export type LookFor = string;
 
 export interface ScanOptions {
   lookFor: LookFor;
   /** Faster settings for live camera frames. */
   fast?: boolean;
-  /** Whether to also run the app's own decoders on this frame. */
+  /** Whether to also run the app's own decoders on this frame ("auto" only). */
   extras?: boolean;
+  /** A live camera frame, which needs stricter settings than a still image. */
+  live?: boolean;
 }
 
 async function bwipRaw(): Promise<BwipRaw> {
@@ -142,32 +156,57 @@ async function postProcess(results: ReadResult[], luma: () => Luma): Promise<Sca
   return out;
 }
 
+/** Composites whose linear parts zxing-cpp can't tell apart count as the same. */
+function sameComposite(found: string | undefined, target: string): boolean {
+  if (!found) return false;
+  return found === target || (COMPOSITE_ALIASES[target] ?? []).includes(found);
+}
+
+function fromExtra(r: { bcid: string; text: string }): ScanResult {
+  return { text: r.text, label: EXTRA_LABELS[r.bcid] ?? r.bcid, bcid: r.bcid, engine: 'app' };
+}
+
 export async function scanImage(image: ImageData, opts: ScanOptions): Promise<ScanResult[]> {
-  const onlyExtra = opts.lookFor !== 'auto' && opts.lookFor !== 'standard';
+  const target = opts.lookFor;
   let lumaCache: Luma | null = null;
   const luma = () => (lumaCache ??= lumaFromRgba(image.data, image.width, image.height));
+  const zx = (formats: string[]) =>
+    readWithZxing(image, {
+      formats: formats as ReaderOptions['formats'],
+      // On camera frames a linear code must be crossed by 3 scan lines, not 2.
+      ...(opts.live ? { minLineCount: 3 } : {}),
+      ...(opts.fast
+        ? { tryHarder: false, tryDownscale: true, tryRotate: true, tryInvert: false }
+        : {}),
+    });
   let out: ScanResult[] = [];
-  if (!onlyExtra) {
-    const results = await readWithZxing(
-      image,
-      opts.fast ? { tryHarder: false, tryDownscale: true, tryRotate: true, tryInvert: false } : {},
-    );
-    out = opts.lookFor === 'standard' ? results.map(fromZxing) : await postProcess(results, luma);
-  }
-  const wantExtras = onlyExtra || (opts.lookFor === 'auto' && opts.extras !== false);
-  if (!out.length && wantExtras) {
-    const bwip = await bwipRaw();
-    const r = decodeExtra(bwip, luma(), {
-      only: onlyExtra ? opts.lookFor : undefined,
+
+  if (target === 'auto' || target === 'standard') {
+    const results = await zx(AUTO_ZXING_FORMATS);
+    out = target === 'standard' ? results.map(fromZxing) : await postProcess(results, luma);
+    if (!out.length && target === 'auto' && opts.extras !== false) {
+      const r = decodeExtra(await bwipRaw(), luma(), { lines: opts.fast ? 14 : 30, strict: true });
+      if (r) out.push(fromExtra(r));
+    }
+  } else if (ZX_TARGETS[target]) {
+    const t = ZX_TARGETS[target];
+    const results = await zx(t.formats);
+    out = results.filter((r) => !t.accept || t.accept(r)).map(fromZxing);
+  } else if (COMPOSITE_FORMATS.includes(target)) {
+    // Only a read that includes the 2D part counts as a composite.
+    const all = await postProcess(await zx(compositeFormats(target)), luma);
+    out = all.filter((r) => sameComposite(r.bcid, target));
+    if (!out.length && target === 'gs1-cc') {
+      const reads = collectCca(luma());
+      const text = reads.length ? decodeCca(await bwipRaw(), reads) : null;
+      if (text) out.push({ text, label: 'GS1 composite 2D part', bcid: 'gs1-cc', engine: 'app' });
+    }
+  } else if (SCANNABLE.has(target)) {
+    const r = decodeExtra(await bwipRaw(), luma(), {
+      only: target,
       lines: opts.fast ? 14 : 30,
     });
-    if (r)
-      out.push({
-        text: r.text,
-        label: EXTRA_LABELS[r.bcid] ?? r.bcid,
-        bcid: r.bcid,
-        engine: 'app',
-      });
+    if (r) out.push(fromExtra(r));
   }
-  return out;
+  return out.map((r) => ({ ...r, frames: framesNeeded(r.bcid, r.label) }));
 }

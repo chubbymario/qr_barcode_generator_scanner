@@ -66,11 +66,17 @@ const check = (ok, label) => {
   if (!ok) failures++;
 };
 
-const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], {
-  cwd: root,
-  env: { ...process.env, BASE_PATH: base },
-  stdio: ['ignore', 'pipe', 'inherit'],
-});
+// Run Vite directly (not through npx) so server.kill() stops the server itself.
+const viteBin = join(root, 'node_modules', 'vite', 'bin', 'vite.js');
+const server = spawn(
+  process.execPath,
+  [viteBin, 'preview', '--port', String(port), '--strictPort'],
+  {
+    cwd: root,
+    env: { ...process.env, BASE_PATH: base },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  },
+);
 await new Promise((resolve, reject) => {
   server.stdout.on('data', (d) => String(d).includes('Local') && resolve());
   server.on('exit', (code) => reject(new Error(`preview exited ${code}`)));
@@ -189,6 +195,13 @@ try {
       value,
     );
   const settle = () => new Promise((r) => setTimeout(r, 600));
+  // Pick a format in a searchable dropdown the way a person would: type, then Enter.
+  const pickFormat = async (selector, query) => {
+    await page.click(selector, { clickCount: 3 });
+    await page.keyboard.type(query);
+    await page.keyboard.press('Enter');
+    await settle();
+  };
 
   // ---------- QR ----------
   await page.goto(url, { waitUntil: 'networkidle0' });
@@ -247,7 +260,19 @@ try {
   await page.click('#tab-barcode');
   await page.waitForSelector('#barcode-format', { timeout: 15000 });
   await page.waitForSelector('.art svg', { timeout: 15000 });
-  await setValue('#barcode-format', 'ean13');
+  // The format dropdown searches by name as you type.
+  await page.click('#barcode-format', { clickCount: 3 });
+  await page.keyboard.type('intelligent mail');
+  const matches = await page.$$eval('#barcode-format ~ .combo-list .combo-option', (l) =>
+    l.map((o) => o.textContent),
+  );
+  check(
+    matches.length >= 1 && /Intelligent Mail/i.test(matches[0]),
+    `Format search finds "${matches[0]}" (${matches.length} matches)`,
+  );
+  await shot('3a-format-search');
+  await page.keyboard.press('Escape');
+  await pickFormat('#barcode-format', 'ean13');
   await settle();
   await setValue('#barcode-data', '590123412345');
   await settle();
@@ -256,7 +281,7 @@ try {
   const ean = await decode(eanFile).catch((e) => e.message);
   check(ean.startsWith('5901234123457'), `EAN-13 PNG scans with computed check digit (${ean})`);
 
-  await setValue('#barcode-format', 'datamatrix');
+  await pickFormat('#barcode-format', 'datamatrix');
   await settle();
   await setValue('#barcode-data', 'DM-SMOKE-42');
   await settle();
@@ -265,7 +290,7 @@ try {
     'Data Matrix PNG scans',
   );
 
-  await setValue('#barcode-format', 'code128');
+  await pickFormat('#barcode-format', 'code128');
   await settle();
   await setValue('#barcode-data', 'ABC-123');
   await settle();
@@ -274,7 +299,7 @@ try {
     'Code 128 PNG scans',
   );
 
-  await setValue('#barcode-format', 'ean13');
+  await pickFormat('#barcode-format', 'ean13');
   await settle();
   await setValue('#barcode-data', '12345');
   await settle();
@@ -294,7 +319,7 @@ try {
     ['posicode', 'PosiCode 42'],
     ['ean13composite', '9520123456788|(99)1234-abcd'],
   ]) {
-    await setValue('#barcode-format', bcid);
+    await pickFormat('#barcode-format', bcid);
     await settle();
     await setValue('#barcode-data', text);
     await settle();
@@ -339,9 +364,7 @@ try {
     await page.waitForFunction(
       () =>
         document.querySelector('.scan-card') ||
-        /No code found|couldn/.test(
-          document.querySelector('.scan-stage .status')?.textContent ?? '',
-        ),
+        /No code|couldn/.test(document.querySelector('.scan-stage .status')?.textContent ?? ''),
       { timeout: 20000 },
     );
     return page.$$eval('.scan-card', (cards) =>
@@ -351,24 +374,39 @@ try {
       })),
     );
   };
+  await page.click('#scan-format');
+  await shot('7a-scan-formats');
+  await page.keyboard.press('Escape');
+  const scanFormat = await page.$eval('#scan-format', (e) => e.value);
+  check(scanFormat === 'QR Code', `Scanner defaults to QR codes ("${scanFormat}")`);
   const qrRead = await scanFile(logoPng);
   check(
     qrRead[0]?.text === 'https://example.org/smoke' && qrRead[0].label === 'QR code',
     `Scanner reads the styled QR with a logo (${JSON.stringify(qrRead[0])})`,
   );
   await shot('7-scan-image');
+  const qrOnly = await scanFile(eanFile);
+  check(qrOnly.length === 0, 'The QR scanner ignores an EAN-13');
+  await pickFormat('#scan-format', 'ean13');
   const eanRead = await scanFile(eanFile);
   check(
     eanRead[0]?.text === '5901234123457',
     `Scanner reads EAN-13 (${JSON.stringify(eanRead[0])})`,
   );
   for (const [bcid, [file, text]] of Object.entries(extraFiles)) {
+    await pickFormat('#scan-format', bcid);
     const r = await scanFile(file);
-    check(
-      r[0]?.text === text,
-      `Scanner reads ${bcid} with the app's own decoder (${JSON.stringify(r[0])})`,
-    );
+    check(r[0]?.text === text, `Scanner set to ${bcid} reads it (${JSON.stringify(r[0])})`);
   }
+  await pickFormat('#scan-format', 'everything');
+  for (const bcid of ['msi', 'onecode', 'code16k', 'ean13composite']) {
+    const [file, text] = extraFiles[bcid];
+    const r = await scanFile(file);
+    check(r[0]?.text === text, `"Everything" reads ${bcid} (${JSON.stringify(r[0])})`);
+  }
+  const pharma = await scanFile(extraFiles.channelcode[0]);
+  check(pharma.length === 0, '"Everything" leaves pick-only formats (Channel Code) alone');
+  await pickFormat('#scan-format', 'qrcode');
 
   // ---------- Scanner: camera ----------
   await page.evaluate(() =>
@@ -397,6 +435,40 @@ try {
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
   await settle();
   await shot('6-mobile-dark');
+
+  // ---------- Footer: licences, clear cache ----------
+  await page.setViewport({ width: 1280, height: 900 });
+  const footerButton = (label) =>
+    page.evaluate((l) => {
+      [...document.querySelectorAll('footer button')].find((b) => b.textContent === l).click();
+    }, label);
+  await footerButton('Licences');
+  await page.waitForFunction(
+    () => /zxing-cpp/.test(document.querySelector('.licence-text')?.textContent ?? ''),
+    { timeout: 10000 },
+  );
+  const lic = await page.$eval('.licence-text', (e) => e.textContent);
+  check(
+    /BSD Zero Clause|0BSD/i.test(lic) && /Apache License/.test(lic) && /bwip-js/i.test(lic),
+    `Licences dialog shows the app licence and third-party notices (${lic.length} chars)`,
+  );
+  await shot('9-licences');
+  await page.keyboard.press('Escape');
+  await Promise.all([
+    page.waitForNavigation({ timeout: 20000 }),
+    footerButton('Clear cache and reload'),
+  ]);
+  await page.waitForFunction(() => /latest version/.test(document.body.textContent), {
+    timeout: 10000,
+  });
+  const after = await page.evaluate(async () => ({
+    url: location.href,
+    caches: 'caches' in self ? (await caches.keys()).length : 0,
+  }));
+  check(
+    !/refresh=/.test(after.url),
+    `Clear cache and reload: page reloaded and confirmed (${after.url}, ${after.caches} caches rebuilt)`,
+  );
 
   const real = errors.filter((e) => !/favicon|manifest|service worker/i.test(e));
   check(real.length === 0, `No console errors${real.length ? `: ${real.join(' | ')}` : ''}`);

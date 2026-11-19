@@ -122,7 +122,8 @@ export interface ScanRecord {
 
 export interface ScanSettings {
   source: 'camera' | 'image';
-  lookFor: string; // 'auto' | 'standard' | a bwip-js id
+  /** What to look for: one format's bwip-js id, 'auto' (everything) or 'standard'. */
+  format: string;
   continuous: boolean;
   feedback: boolean;
   deviceId: string;
@@ -245,7 +246,7 @@ export function defaultState(): AppState {
     },
     scan: {
       source: 'camera',
-      lookFor: 'auto',
+      format: 'qrcode',
       continuous: false,
       feedback: true,
       deviceId: '',
@@ -291,6 +292,9 @@ export function loadState(): AppState {
   }
   const shared = readShareHash(location.hash);
   if (shared) state = mergeDeep(state, shared);
+  // Before v1.1 the scanner's setting was "lookFor" and defaulted to everything.
+  // Start from the new default (QR code) instead of carrying that over.
+  delete (state.scan as unknown as Record<string, unknown>).lookFor;
   return state;
 }
 

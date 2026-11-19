@@ -1,6 +1,7 @@
 // Entry point for the app's own decoders: the formats zxing-cpp can't read.
 
-import { rotate90, rowRuns, samplePositions, segments, type Luma } from './lines';
+import { rotate90, rowRuns, samplePositions, segmentsWithGaps, type Luma } from './lines';
+import { PICK_ONLY } from '../targets';
 import {
   decodeBc412,
   decodeChannel,
@@ -39,23 +40,36 @@ const LINEAR_ONLY = new Set([
 
 type LinearFn = (bwip: BwipRaw, runs: number[]) => { bcid: string; text: string } | null;
 
-function linearDecoders(only?: string): LinearFn[] {
+/** Linear decoders that check a check character or fixed structure; used by "Everything". */
+const STRICT_LINEAR = ['width', 'bc412', 'posicode'];
+
+function linearDecoders(only?: string, strict = false): LinearFn[] {
   const id = only === 'industrial2of5' ? 'code2of5' : only;
-  const all: [string[], LinearFn][] = [
-    [['ean2', 'ean5'], decodeEanAddon],
+  const all: [string[], LinearFn, string][] = [
+    [['ean2', 'ean5'], decodeEanAddon, 'addon'],
     [
       WIDTH_SPECS.map((s) => s.bcid),
       (b, r) =>
-        decodeWidthFormats(b, r, id && WIDTH_SPECS.some((s) => s.bcid === id) ? id : undefined),
+        decodeWidthFormats(
+          b,
+          r,
+          id && WIDTH_SPECS.some((s) => s.bcid === id) ? id : undefined,
+          strict,
+        ),
+      'width',
     ],
-    [['bc412'], (b, r) => wrap('bc412', decodeBc412(b, r, only === 'bc412'))],
-    [['channelcode'], (b, r) => wrap('channelcode', decodeChannel(b, r))],
-    [['symbol'], (b, r) => wrap('symbol', decodeFim(b, r))],
-    [['posicode'], (b, r) => wrap('posicode', decodePosicode(b, r))],
+    [['bc412'], (b, r) => wrap('bc412', decodeBc412(b, r, only === 'bc412')), 'bc412'],
+    [['channelcode'], (b, r) => wrap('channelcode', decodeChannel(b, r)), 'channel'],
+    [['symbol'], (b, r) => wrap('symbol', decodeFim(b, r)), 'fim'],
+    [['posicode'], (b, r) => wrap('posicode', decodePosicode(b, r)), 'posicode'],
   ];
   if (only === 'raw') return [(b, r) => wrap('raw', decodeRawWidths(b, r))];
   if (only === 'pharmacode') return [(b, r) => wrap('pharmacode', decodePharmacode(b, r))];
-  return all.filter(([ids]) => !id || ids.includes(id)).map(([, fn]) => fn);
+  return all
+    .filter(
+      ([ids, , kind]) => (!id || ids.includes(id)) && (!strict || STRICT_LINEAR.includes(kind)),
+    )
+    .map(([, fn]) => fn);
 }
 
 const wrap = (bcid: string, text: string | null) => (text === null ? null : { bcid, text });
@@ -71,11 +85,18 @@ interface Found {
  * human-readable text under a barcode can itself look like a tiny barcode,
  * so the first match isn't necessarily the real one.
  */
-function scanLines(bwip: BwipRaw, l: Luma, fns: LinearFn[], lines: number): Found | null {
+function scanLines(
+  bwip: BwipRaw,
+  l: Luma,
+  fns: LinearFn[],
+  lines: number,
+  strict = false,
+): Found | null {
   const found = new Map<string, Found>();
   for (const y of samplePositions(l.height, lines)) {
     const runs = rowRuns(l, y);
-    for (const seg of segments(runs)) {
+    for (const { runs: seg, before, after } of segmentsWithGaps(runs)) {
+      if (!hasQuietZones(seg, before, after)) continue;
       for (const fn of fns) {
         const r = fn(bwip, seg);
         if (!r) continue;
@@ -90,7 +111,15 @@ function scanLines(bwip: BwipRaw, l: Luma, fns: LinearFn[], lines: number): Foun
       }
     }
   }
-  return best([...found.values()]);
+  // A real barcode is crossed by several scan lines that agree.
+  return best([...found.values()].filter((f) => f.hits >= (strict ? 3 : 2)));
+}
+
+/** Blank space either side of at least 4 narrow bars: a barcode, not part of a pattern. */
+function hasQuietZones(seg: number[], before: number, after: number): boolean {
+  const sorted = [...seg].sort((a, b) => a - b);
+  const narrow = sorted[Math.floor(sorted.length * 0.1)];
+  return before >= narrow * 4 && after >= narrow * 4;
 }
 
 function best(list: (Found | null)[]): Found | null {
@@ -106,6 +135,11 @@ export interface ExtraOptions {
   only?: string;
   /** Lines sampled per direction (more is slower but finds smaller codes). */
   lines?: number;
+  /**
+   * For "Everything": skip formats with no check character, and require quiet
+   * zones and agreement between scan lines, so random patterns don't read.
+   */
+  strict?: boolean;
 }
 
 /**
@@ -119,6 +153,7 @@ export function decodeExtra(
   opts: ExtraOptions = {},
 ): ExtraResult | null {
   const { only } = opts;
+  const strict = !only && !!opts.strict;
   const lines = opts.lines ?? 24;
   const wantStacked = !only || STACKED_FORMATS.includes(only);
   let rotated: Luma | null = null;
@@ -135,21 +170,24 @@ export function decodeExtra(
   const wantPostalAll = !only || !LINEAR_ONLY.has(only);
 
   if (wantLinearAll && only !== 'pharmacode') {
-    const fns = linearDecoders(only);
-    candidates.push(scanLines(bwip, image, fns, lines), scanLines(bwip, turned(), fns, lines));
+    const fns = linearDecoders(only, strict);
+    candidates.push(
+      scanLines(bwip, image, fns, lines, strict),
+      scanLines(bwip, turned(), fns, lines, strict),
+    );
   }
   if (wantPostalAll) {
     for (const l of [image, turned()]) {
       const bars = readBars(l, only === 'pharmacode2' ? 2 : only ? 4 : 10);
       if (!bars) continue;
-      const r = decodePostal(bwip, bars, only);
+      const r = decodePostal(bwip, bars, only, strict ? PICK_ONLY : undefined);
       if (r) candidates.push({ result: r, bars: bars.states.length, hits: 1 });
     }
   }
   const top = best(candidates);
   if (top) return top.result;
   // Pharmacode last: almost any row of plain bars is a valid Pharmacode.
-  if (!only || only === 'pharmacode') {
+  if ((!only && !strict) || only === 'pharmacode') {
     const fns = linearDecoders('pharmacode');
     return (
       best([scanLines(bwip, image, fns, lines), scanLines(bwip, turned(), fns, lines)])?.result ??

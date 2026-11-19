@@ -140,6 +140,7 @@ function decodeWith(
   spec: WidthSpec,
   model: Model,
   modules: number[],
+  strict = false,
 ): string | null {
   const { start, stop, charLength: L } = model;
   if (modules.length < start.length + stop.length + L) return null;
@@ -155,6 +156,8 @@ function decodeWith(
   }
   for (const [k, opts] of spec.attempts) {
     if (text.length - k < 1) continue;
+    // Strict mode: only readings with a check character, which noise rarely fakes.
+    if (strict && !opts.includes('includecheck') && !spec.stopLength) continue;
     const candidate = text.slice(0, text.length - k);
     if (verify(bwip, spec.bcid, candidate, opts, modules)) return candidate;
   }
@@ -165,6 +168,7 @@ export function decodeWidthFormats(
   bwip: BwipRaw,
   runs: number[],
   only?: string,
+  strict = false,
 ): { bcid: string; text: string } | null {
   for (const spec of WIDTH_SPECS) {
     if (only && only !== spec.bcid) continue;
@@ -172,7 +176,7 @@ export function decodeWidthFormats(
     if (!model) continue;
     for (const modules of quantizeAll(runs, model.widths)) {
       for (const m of [modules, [...modules].reverse()]) {
-        const text = decodeWith(bwip, spec, model, m);
+        const text = decodeWith(bwip, spec, model, m, strict);
         if (text !== null) return { bcid: spec.bcid, text };
       }
     }
@@ -210,10 +214,9 @@ export function decodeBc412(bwip: BwipRaw, runs: number[], allowPlain = false): 
       // space isn't part of the symbol, so pad it back on.
       const variants: [number[], string[]][] = allowPlain
         ? [
-            [
-              [...m, 1],
-              ['includecheck', ''],
-            ],
+            // Without start/stop bars only a check character tells BC412 from
+            // any other row of even bars, so plain mode needs one.
+            [[...m, 1], ['includecheck']],
           ]
         : [];
       if (
@@ -241,10 +244,14 @@ export function decodeBc412(bwip: BwipRaw, runs: number[], allowPlain = false): 
         }
         if (!text) continue;
         // In "semi" mode the check character is the second character; otherwise it's last.
-        const candidates =
-          optsList[0] === 'semi' ? [text[0] + text.slice(2)] : [text.slice(0, -1), text];
+        const candidates = optsList[0] === 'semi' ? [text[0] + text.slice(2)] : [text.slice(0, -1)];
         for (const candidate of candidates) {
-          if (!candidate) continue;
+          // A run of one repeated character is what stripes (blinds, rulers) read as.
+          if (
+            !candidate ||
+            (optsList[0] !== 'semi' && (candidate.length < 3 || /^(.)\1*$/.test(candidate)))
+          )
+            continue;
           for (const opts of optsList)
             if (verify(bwip, 'bc412', candidate, opts, m)) return candidate;
         }

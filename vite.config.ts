@@ -46,8 +46,12 @@ function contentSecurityPolicy(): Plugin {
   };
 }
 
+// Shown in the footer, so you can tell when an update has arrived.
+const version = `${process.env.npm_package_version ?? '1.0.0'}+${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}${process.env.GITHUB_SHA ? `.${process.env.GITHUB_SHA.slice(0, 7)}` : ''}`;
+
 export default defineConfig({
   base,
+  define: { __APP_VERSION__: JSON.stringify(version) },
   // The scanner runs in a module worker that lazy-loads zxing-cpp and bwip-js.
   worker: { format: 'es' },
   build: {
@@ -85,6 +89,8 @@ export default defineConfig({
         // jsPDF's optional HTML/SVG helpers are never used by this app.
         globIgnores: ['**/html2canvas-*.js', '**/purify.es-*.js', '**/index.es-*.js'],
         navigateFallback: 'index.html',
+        // Let real files (licences, manifest) through instead of the app page.
+        navigateFallbackDenylist: [/\.(txt|webmanifest|json|xml)$/],
       },
     }),
   ],

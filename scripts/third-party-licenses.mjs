@@ -1,5 +1,6 @@
 // Collects the licence text of every runtime dependency into
-// dist/THIRD_PARTY_LICENSES.txt. The bundled libraries are MIT-licensed (and
+// public/THIRD_PARTY_LICENSES.txt (committed, served in dev and copied into
+// every build). Runs before `npm run dev` and `npm run build`. The bundled libraries are MIT-licensed (and
 // JSZip is MIT or GPLv3, used here under MIT), which requires shipping their
 // copyright notices with the built site. Runs automatically after `npm run build`.
 
@@ -58,7 +59,7 @@ sections.push(
 );
 
 const header = `Third-party software included in QR & Barcode Studio
-Generated ${new Date().toISOString().slice(0, 10)} from the installed packages.
+Generated from the installed packages by scripts/third-party-licenses.mjs.
 
 The app's own code is under the 0BSD licence (see LICENSE in the repository).
 The font is Archivo (SIL Open Font License 1.1) via @fontsource.
@@ -67,10 +68,6 @@ are copied from BWIPP (bwip-js, MIT).
 
 `;
 const out = header + sections.join('\n\n') + '\n';
-const target = join(root, 'dist', 'THIRD_PARTY_LICENSES.txt');
-if (existsSync(join(root, 'dist'))) {
-  writeFileSync(target, out);
-  console.log(`Wrote ${sections.length} licences to dist/THIRD_PARTY_LICENSES.txt`);
-} else {
-  process.stdout.write(out);
-}
+const target = join(root, 'public', 'THIRD_PARTY_LICENSES.txt');
+writeFileSync(target, out);
+console.log(`Wrote ${sections.length} licences to public/THIRD_PARTY_LICENSES.txt`);

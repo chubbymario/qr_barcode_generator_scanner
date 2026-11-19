@@ -103,9 +103,9 @@ export function lineThreshold(values: ArrayLike<number>): number | null {
  * Edges are placed between pixels by linear interpolation for accuracy
  * when bars are only a couple of pixels wide.
  */
-export function runsAlong(values: ArrayLike<number>, threshold?: number): number[] {
+export function runsAlong(values: ArrayLike<number>, threshold?: number): Runs {
   const t = threshold ?? lineThreshold(values);
-  if (t === null) return [];
+  if (t === null) return [] as Runs;
   const edges: number[] = [];
   let dark = values[0] < t;
   if (dark) edges.push(0);
@@ -120,15 +120,21 @@ export function runsAlong(values: ArrayLike<number>, threshold?: number): number
   }
   if (dark) edges.push(values.length);
   // edges alternate: dark start, dark end, dark start, ...
-  if (edges.length < 2) return [];
-  const runs: number[] = [];
+  if (edges.length < 2) return [] as Runs;
+  const runs: Runs = [];
   for (let i = 1; i < edges.length; i++) runs.push(edges[i] - edges[i - 1]);
+  // Light space before the first bar and after the last one.
+  runs.lead = edges[0];
+  runs.trail = values.length - edges[edges.length - 1];
   return runs; // [bar, space, bar, ..., bar]
 }
 
+/** Bar/space runs, plus the light margins either side when known. */
+export type Runs = number[] & { lead?: number; trail?: number };
+
 /** Each image row's runs are computed once and shared by every decoder. */
-const runCache = new WeakMap<Luma, Map<number, number[]>>();
-export function rowRuns(l: Luma, y: number): number[] {
+const runCache = new WeakMap<Luma, Map<number, Runs>>();
+export function rowRuns(l: Luma, y: number): Runs {
   let m = runCache.get(l);
   if (!m) runCache.set(l, (m = new Map()));
   let r = m.get(y);
@@ -150,8 +156,25 @@ export function crop(l: Luma, x0: number, y0: number, x1: number, y1: number): L
 
 /** Split a run list at wide light gaps, so separate codes or text become separate segments. */
 export function segments(runs: number[]): number[][] {
+  return segmentsWithGaps(runs).map((s) => s.runs);
+}
+
+export interface Segment {
+  runs: number[];
+  /** Light space before and after the segment (0 when unknown). */
+  before: number;
+  after: number;
+}
+
+/**
+ * Pieces of a line that could each be one barcode: the whole line, the line
+ * split at unusually wide spaces, and the line without a surrounding frame.
+ */
+export function segmentsWithGaps(runs: Runs): Segment[] {
   if (runs.length < 3) return [];
-  const out: number[][] = [runs];
+  const lead = runs.lead ?? 0;
+  const trail = runs.trail ?? 0;
+  const out: Segment[] = [{ runs, before: lead, after: trail }];
   const sorted = [...runs].sort((a, b) => a - b);
   const median = sorted[sorted.length >> 1];
   for (const factor of [5, 9]) {
@@ -159,19 +182,29 @@ export function segments(runs: number[]): number[][] {
     const gap = median * factor;
     for (let i = 1; i < runs.length; i += 2) {
       if (runs[i] > gap) {
-        if (i - start >= 3) out.push(runs.slice(start, i));
+        if (i - start >= 3)
+          out.push({
+            runs: runs.slice(start, i),
+            before: start ? runs[start - 1] : lead,
+            after: runs[i],
+          });
         start = i + 1;
       }
     }
-    if (start > 0 && runs.length - start >= 3) out.push(runs.slice(start));
+    if (start > 0 && runs.length - start >= 3)
+      out.push({ runs: runs.slice(start), before: runs[start - 1], after: trail });
   }
   // A frame drawn around some codes (e.g. Pharmacode) shows up as a thin bar
   // and a wide gap at each end: also try without it.
   if (runs.length > 7 && runs[1] > median * 3 && runs[runs.length - 2] > median * 3) {
-    out.push(runs.slice(2, runs.length - 2));
+    out.push({
+      runs: runs.slice(2, runs.length - 2),
+      before: runs[1],
+      after: runs[runs.length - 2],
+    });
   }
   const seen = new Set<string>();
-  return out.filter((s) => {
+  return out.filter(({ runs: s }) => {
     const k = `${s.length}:${s[0]}:${s[s.length - 1]}`;
     if (seen.has(k)) return false;
     seen.add(k);

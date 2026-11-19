@@ -192,7 +192,73 @@ if (gh) {
     : `https://github.com/${gh[1]}/${gh[1]}.github.io`;
   footerLinks.prepend(h('a', { href, rel: 'noopener' }, 'Source code'));
 }
+// Licences: shown in a dialog (a plain link would be caught by the offline
+// cache's page fallback and just reload the app).
+const licenceDialog = h(
+  'dialog',
+  { class: 'licences', 'aria-labelledby': 'licences-title' },
+  h('div', { class: 'dialog-head' }, h('h2', { id: 'licences-title' }, 'Licences')),
+  h('pre', { class: 'licence-text' }, 'Loading…'),
+);
+const closeLicences = button('Close', () => licenceDialog.close(), { kind: 'plain' });
+licenceDialog.querySelector('.dialog-head')!.append(
+  h(
+    'a',
+    {
+      href: `${import.meta.env.BASE_URL}THIRD_PARTY_LICENSES.txt`,
+      target: '_blank',
+      rel: 'noopener',
+      class: 'btn quiet',
+    },
+    'Open as text',
+  ),
+  closeLicences,
+);
+licenceDialog.addEventListener('click', (e) => e.target === licenceDialog && licenceDialog.close());
+document.body.append(licenceDialog);
+async function showLicences() {
+  licenceDialog.showModal();
+  const pre = licenceDialog.querySelector('pre')!;
+  try {
+    const [own, third] = await Promise.all([
+      fetch(`${import.meta.env.BASE_URL}LICENSE.txt`).then((r) => (r.ok ? r.text() : '')),
+      fetch(`${import.meta.env.BASE_URL}THIRD_PARTY_LICENSES.txt`).then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.text();
+      }),
+    ]);
+    pre.textContent = `${own ? `QR & Barcode Studio\n\n${own.trim()}\n\n\n` : ''}${third}`;
+  } catch {
+    pre.textContent = 'The licence file couldn’t be loaded. Check your connection and try again.';
+  }
+}
+
+/** Remove the offline copy and cached files, then load the newest version. */
+async function clearCacheAndReload() {
+  try {
+    const regs = (await navigator.serviceWorker?.getRegistrations()) ?? [];
+    await Promise.all(regs.map((r) => r.unregister()));
+    if ('caches' in window) await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+  } finally {
+    // A fresh query string also skips the browser's normal HTTP cache for the page.
+    const url = new URL(location.href);
+    url.searchParams.set('refresh', String(Date.now()));
+    location.replace(url.toString());
+  }
+}
+if (new URL(location.href).searchParams.has('refresh')) {
+  const url = new URL(location.href);
+  url.searchParams.delete('refresh');
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+  queueMicrotask(() => toast('Updated to the latest version.'));
+}
+
 footerLinks.append(
+  button('Licences', () => void showLicences(), { kind: 'quiet' }),
+  button('Clear cache and reload', () => void clearCacheAndReload(), {
+    kind: 'quiet',
+    title: 'Fetch the newest version of the app. Your settings are kept.',
+  }),
   button(
     'Reset all settings',
     () => {
@@ -203,6 +269,7 @@ footerLinks.append(
     { kind: 'quiet' },
   ),
 );
+document.getElementById('app-version')!.textContent = `Version ${__APP_VERSION__}`;
 
 // ----- offline support -----
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -213,6 +280,14 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
       },
       onOfflineReady() {
         toast('Ready to work offline.');
+      },
+      // Check for a new version hourly and whenever the app comes back into view.
+      onRegisteredSW(_url, reg) {
+        if (!reg) return;
+        setInterval(() => void reg.update(), 60 * 60 * 1000);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') void reg.update();
+        });
       },
     });
   });

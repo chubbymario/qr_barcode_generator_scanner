@@ -17,6 +17,7 @@ import {
 } from '../ui/dom';
 import type { PanelContext } from '../qr/panel';
 import { scanSupport } from '../scan/support';
+import { combobox, type ComboOption } from '../ui/combobox';
 
 export function buildBarcodePanel(ctx: PanelContext, symbols: readonly SymbolInfo[]): HTMLElement {
   const bc = ctx.get().barcode;
@@ -25,44 +26,24 @@ export function buildBarcodePanel(ctx: PanelContext, symbols: readonly SymbolInf
   const sym = symbols.find((s) => s.bcid === bc.bcid) ?? symbols[0];
   const groups = groupSymbols(symbols);
 
-  // ----- Format picker with search -----
-  const formatSelect = select([], bc.bcid, (v) => set((b) => (b.bcid = v), true));
-  formatSelect.size = 1;
-  formatSelect.id = 'barcode-format';
-  const fillFormats = (query: string) => {
-    const q = query.trim().toLowerCase();
-    const frag = document.createDocumentFragment();
-    for (const g of groups) {
-      const matches = g.symbols.filter(
-        (s) => !q || s.desc.toLowerCase().includes(q) || s.bcid.toLowerCase().includes(q),
-      );
-      if (!matches.length) continue;
-      if (q && g.name === 'Popular') continue; // avoid duplicates while searching
-      frag.append(
-        h(
-          'optgroup',
-          { label: g.name },
-          // Mark formats the Scan tab can't read, so it's clear before printing one.
-          matches.map((s) =>
-            h(
-              'option',
-              { value: s.bcid },
-              s.desc + (scanSupport(s.bcid).level === 'none' ? ' (can’t scan)' : ''),
-            ),
-          ),
-        ),
-      );
-    }
-    formatSelect.replaceChildren(frag);
-    if ([...formatSelect.options].some((o) => o.value === bc.bcid)) formatSelect.value = bc.bcid;
-    else if (formatSelect.options.length) formatSelect.selectedIndex = -1;
-  };
-  fillFormats('');
-  const search = textInput('', (v) => fillFormats(v), {
-    type: 'search',
-    placeholder: 'Search 111 formats',
+  // ----- Format picker: one searchable dropdown -----
+  const formatOptions: ComboOption[] = groups.flatMap((g) =>
+    g.symbols.map((s) => ({
+      value: s.bcid,
+      label: s.desc,
+      group: g.name,
+      keywords: s.bcid,
+      // Mark formats the Scan tab can't read, so it's clear before printing one.
+      note: scanSupport(s.bcid).level === 'none' ? 'can’t scan' : undefined,
+    })),
+  );
+  const formatSelect = combobox({
+    options: formatOptions,
+    value: bc.bcid,
+    onChange: (v) => set((b) => (b.bcid = v), true),
+    placeholder: `Search ${symbols.length} formats`,
   });
-  search.setAttribute('aria-label', 'Search formats');
+  formatSelect.id = 'barcode-format';
 
   // ----- Data -----
   const text = bc.texts[bc.bcid] ?? sym?.text ?? '';
@@ -75,7 +56,6 @@ export function buildBarcodePanel(ctx: PanelContext, symbols: readonly SymbolInf
   const format = section(
     'Format and data',
     true,
-    field('Find a format', search),
     field('Format', formatSelect, `Scanning: ${scanSupport(bc.bcid).note}`),
     field('Data', dataBox, hint),
     h(

@@ -1,9 +1,14 @@
 import type { ScanRecord, ScanSettings } from '../state';
 import type { PanelContext } from '../qr/panel';
 import { button, checkbox, field, h, section, segmented, select, toast } from '../ui/dom';
+import { combobox, type ComboOption } from '../ui/combobox';
+import { CATEGORIES } from '../barcode/catalog';
+import { SYMBOL_NAMES } from '../barcode/names';
+import { PICK_ONLY, SCANNABLE } from './targets';
+import { UNSUPPORTED_FORMATS } from './support';
 import { downloadBlob } from '../export/files';
 import type { ScanResult } from './engine';
-import { APP_DECODED, HINT_ONLY_FORMATS } from './lists';
+import { EXTRA_FORMATS } from './lists';
 import { scan, warmUp } from './client';
 import { EXTRA_LABELS } from './formats';
 import { interpret, safeHref } from './interpret';
@@ -57,6 +62,23 @@ export function buildScanPanel(ctx: PanelContext): {
   // ---------- results ----------
   let lastKey = '';
   let lastAt = 0;
+
+  // A camera read is shown only once enough frames in a row agree (see
+  // framesNeeded), so a pattern that fools a decoder in one blurry frame
+  // doesn't count. Reads not seen again within CONFIRM_MS are forgotten.
+  const CONFIRM_MS = 1500;
+  const sightings = new Map<string, { count: number; at: number }>();
+  function confirmed(results: ScanResult[]): ScanResult[] {
+    const now = Date.now();
+    for (const [k, v] of sightings) if (now - v.at > CONFIRM_MS) sightings.delete(k);
+    return results.filter((r) => {
+      const key = `${r.bcid}\u0000${r.text}`;
+      const seen = sightings.get(key);
+      const count = (seen?.count ?? 0) + 1;
+      sightings.set(key, { count, at: now });
+      return count >= (r.frames ?? 1);
+    });
+  }
 
   function addToHistory(r: ScanResult) {
     if (!ctx.get().scan.keepHistory) return;
@@ -325,15 +347,18 @@ export function buildScanPanel(ctx: PanelContext): {
       const g = grab.getContext('2d', { willReadFrequently: true })!;
       g.drawImage(video, 0, 0, w, hh);
       const img = g.getImageData(0, 0, w, hh);
-      const lookFor = ctx.get().scan.lookFor;
+      const lookFor = ctx.get().scan.format;
       try {
-        // Thorough settings every third frame; the app's decoders every fourth.
-        const results = await scan(img, {
+        // Thorough settings every third frame. In "Everything" mode the app's
+        // own decoders run every other frame, so confirmations still line up.
+        const raw = await scan(img, {
           lookFor,
           fast: frameNo % 3 !== 0,
-          extras: frameNo % 4 === 0,
+          extras: frameNo % 2 === 0,
+          live: true,
         });
         if (!running) return;
+        const results = confirmed(raw);
         drawOutlines(results, 1 / scale, video.videoWidth, video.videoHeight);
         if (results.length) {
           const key = results.map((r) => r.label + r.text).join('|');
@@ -405,7 +430,7 @@ export function buildScanPanel(ctx: PanelContext): {
       bmp.close();
       viewport.classList.add('has-image');
       const img = g.getImageData(0, 0, w, hh);
-      const results = await scan(img, { lookFor: ctx.get().scan.lookFor });
+      const results = await scan(img, { lookFor: ctx.get().scan.format });
       drawOutlines(results, 1, w, hh);
       if (results.length) {
         feedback();
@@ -414,7 +439,9 @@ export function buildScanPanel(ctx: PanelContext): {
         status.textContent = `Found ${results.length === 1 ? results[0].label : `${results.length} codes`}.`;
       } else {
         status.textContent =
-          'No code found. Try a sharper or closer image. For less common formats, pick the format under “Look for”.';
+          ctx.get().scan.format === 'auto'
+            ? 'No code found. Try a sharper or closer image, or pick the format under “Look for”: a few formats are only read when picked.'
+            : 'No code of that format found. Try a sharper or closer image, or pick another format under “Look for”.';
       }
     } catch (err) {
       status.textContent = err instanceof Error ? err.message : 'That image couldn’t be read.';
@@ -451,27 +478,60 @@ export function buildScanPanel(ctx: PanelContext): {
   document.addEventListener('paste', onPaste);
 
   // ---------- controls ----------
-  const lookOptions = [
+  const lookOptions: ComboOption[] = [
     {
-      group: 'All formats',
-      options: [
-        { value: 'auto', label: 'Everything (recommended)' },
-        { value: 'standard', label: 'Common formats only (faster)' },
-      ],
+      value: 'auto',
+      label: 'Everything',
+      group: 'Several formats',
+      keywords: 'all any auto',
+      note: 'slower',
     },
     {
-      group: 'One format, read by this app’s own decoder',
-      options: APP_DECODED.filter((id) => !HINT_ONLY_FORMATS.includes(id)).map((id) => ({
-        value: id,
-        label: EXTRA_LABELS[id] ?? id,
-      })),
-    },
-    {
-      group: 'Only read when picked here',
-      options: HINT_ONLY_FORMATS.map((id) => ({ value: id, label: EXTRA_LABELS[id] ?? id })),
+      value: 'standard',
+      label: 'Common formats',
+      group: 'Several formats',
+      keywords: 'zxing standard fast',
     },
   ];
-  const lookSelect = select(lookOptions, sc.lookFor, (v) => set((s) => (s.lookFor = v)));
+  const seen = new Set<string>();
+  for (const cat of CATEGORIES) {
+    if (cat.name === 'Popular') continue;
+    for (const id of cat.ids) {
+      if (seen.has(id) || !SCANNABLE.has(id)) continue;
+      seen.add(id);
+      lookOptions.push({
+        value: id,
+        label: SYMBOL_NAMES[id] ?? EXTRA_LABELS[id] ?? id,
+        group: cat.name,
+        keywords: `${id} ${EXTRA_LABELS[id] ?? ''}`,
+        note: PICK_ONLY.has(id)
+          ? 'only when picked'
+          : EXTRA_FORMATS.includes(id)
+            ? 'app decoder'
+            : undefined,
+      });
+    }
+  }
+  // Popular formats first, so the common picks are at the top of the list.
+  const popular = CATEGORIES.find((c) => c.name === 'Popular')!.ids.filter((id) =>
+    SCANNABLE.has(id),
+  );
+  lookOptions.splice(
+    2,
+    0,
+    ...popular.map((id) => ({ ...lookOptions.find((o) => o.value === id)!, group: 'Popular' })),
+  );
+  const notYet = Object.keys(UNSUPPORTED_FORMATS).filter((id) => id !== 'flattermarken');
+  const lookSelect = combobox({
+    options: lookOptions,
+    value: lookOptions.some((o) => o.value === sc.format) ? sc.format : 'qrcode',
+    onChange: (v) => {
+      sightings.clear();
+      set((s) => (s.format = v));
+    },
+    placeholder: 'Search formats',
+  });
+  lookSelect.id = 'scan-format';
 
   const historyList = h('ol', { class: 'history' });
   function drawHistory() {
@@ -549,9 +609,9 @@ export function buildScanPanel(ctx: PanelContext): {
       'Look for',
       true,
       field(
-        'Formats',
+        'Format',
         lookSelect,
-        '“Everything” reads every format this app makes that can be scanned. Pick a single format to force it, which also unlocks Custom 1D and 4-state patterns.',
+        `Picking the format you’re scanning is fastest and avoids false reads. “Everything” skips formats with no check digit (Pharmacode, KIX, EAN add-ons, FIM, Channel Code, custom patterns): pick those on their own. Not readable yet: ${notYet.map((id) => SYMBOL_NAMES[id] ?? id).join(', ')}.`,
       ),
     ),
     section(

@@ -472,6 +472,7 @@ export function decodePostal(
   bwip: BwipRaw,
   read: BarRead,
   only?: string,
+  skip?: ReadonlySet<string>,
 ): { bcid: string; text: string } | null {
   for (const r of [read, { ...read, states: flip(read.states) }]) {
     if (only === 'daft') {
@@ -479,7 +480,7 @@ export function decodePostal(
       continue;
     }
     for (const [bcid, fn] of POSTAL) {
-      if (only && only !== bcid) continue;
+      if ((only && only !== bcid) || skip?.has(bcid)) continue;
       const text = fn(bwip, r);
       if (text !== null) return { bcid, text };
     }
