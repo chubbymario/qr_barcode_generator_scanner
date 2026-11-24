@@ -35,6 +35,7 @@ import {
 } from './extra';
 import { decodeCompositeBits } from './gs1cc';
 import { maxiCodeCandidates } from './maxicode';
+import { readTwoD, settleCodeOne, TWOD_FORMATS, type TwoDResult } from './twod';
 import { barsAfter, darkQuietZones, darkSurround, looksLikeStackedRow } from './neighbours';
 import { interpretations, preferTarget } from './identify';
 import { SYMBOL_NAMES } from '../barcode/names';
@@ -469,6 +470,24 @@ function fromExtra(r: { bcid: string; text: string }): ScanResult {
   return { text: r.text, label: EXTRA_LABELS[r.bcid] ?? r.bcid, bcid: r.bcid, engine: 'app' };
 }
 
+function fromTwoD(r: TwoDResult): ScanResult {
+  return { ...fromExtra(r), corners: r.corners, details: r.details };
+}
+
+/** Settle any Code One read with more than one possible reading (loads bwip-js). */
+async function settled(rs: TwoDResult[]): Promise<TwoDResult[]> {
+  if (!rs.some((r) => r.check)) return rs;
+  const bwip = await bwipRaw();
+  const encode = (text: string, opts: string) => {
+    try {
+      return bwip.raw('codeone', text, opts)[0] as { pixs: number[]; pixx: number; pixy: number };
+    } catch {
+      return null;
+    }
+  };
+  return rs.map((r) => (r.check ? { ...r, text: settleCodeOne(r.check, encode) } : r));
+}
+
 export async function scanImage(image: ImageData, opts: ScanOptions): Promise<ScanResult[]> {
   const target = opts.lookFor;
   preferred =
@@ -564,7 +583,10 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     // zxing-cpp can't read too. On the camera, one find at a time is enough.
     const more = !opts.live || !out.length;
     const add = (r: ScanResult) => {
-      if (!out.some((o) => o.text === r.text)) out.push(r);
+      // The same text in one of the app's 2D formats next to another code
+      // (say a QR) is a second code, not the same one read twice.
+      const twoD = TWOD_FORMATS.includes(r.bcid ?? '');
+      if (!out.some((o) => o.text === r.text && (!twoD || o.bcid === r.bcid))) out.push(r);
     };
     if (more && !opts.fast) (await maxi()).forEach(add);
     // Blank out what's been read already, so the row-based readers (which
@@ -590,6 +612,13 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
     if (more && target === 'auto' && opts.extras !== false) {
       const r = extra(await bwipRaw(), { lines: opts.fast ? 14 : 30, strict: true });
       if (r) add(fromExtra(r));
+      // Code One, Han Xin, DotCode and Ultracode (all checked by Reed-Solomon).
+      // Still images only: on the camera they're read when picked.
+      if (!opts.fast && !opts.live) {
+        (await settled(readTwoD([luma, straight], image, undefined, true))).forEach((t) =>
+          add(fromTwoD(t)),
+        );
+      }
     }
   } else if (ZX_TARGETS[target]) {
     const t = ZX_TARGETS[target];
@@ -606,6 +635,8 @@ export async function scanImage(image: ImageData, opts: ScanOptions): Promise<Sc
       const text = reads.length ? decodeCca(await bwipRaw(), reads) : null;
       if (text) out.push({ text, label: 'GS1 composite 2D part', bcid: 'gs1-cc', engine: 'app' });
     }
+  } else if (TWOD_FORMATS.includes(target)) {
+    out = (await settled(readTwoD([luma, straight], image, target, !opts.live))).map(fromTwoD);
   } else if (SCANNABLE.has(target)) {
     const r = extra(await bwipRaw(), {
       only: target,

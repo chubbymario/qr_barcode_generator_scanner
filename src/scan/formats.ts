@@ -131,6 +131,11 @@ export const EXTRA_LABELS: Record<string, string> = {
   code49: 'Code 49',
   codablockf: 'Codablock F',
   hibccodablockf: 'HIBC Codablock F',
+  codeone: 'Code One',
+  hanxin: 'Han Xin Code',
+  dotcode: 'DotCode',
+  gs1dotcode: 'GS1 DotCode',
+  ultracode: 'Ultracode',
   raw: 'Custom 1D pattern',
   daft: 'Custom 4-state pattern',
 };

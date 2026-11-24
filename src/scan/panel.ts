@@ -8,7 +8,7 @@ import { PICK_ONLY, SCANNABLE } from './targets';
 import { UNSUPPORTED_FORMATS } from './support';
 import { downloadBlob } from '../export/files';
 import type { ScanResult } from './engine';
-import { EXTRA_FORMATS } from './lists';
+import { EXTRA_FORMATS, TWOD_FORMATS } from './lists';
 import { scan, warmUp } from './client';
 import { EXTRA_LABELS } from './formats';
 import { interpret, safeHref } from './interpret';
@@ -539,7 +539,7 @@ export function buildScanPanel(ctx: PanelContext): {
         keywords: `${id} ${EXTRA_LABELS[id] ?? ''}`,
         note: PICK_ONLY.has(id)
           ? 'only when picked'
-          : EXTRA_FORMATS.includes(id)
+          : EXTRA_FORMATS.includes(id) || TWOD_FORMATS.includes(id)
             ? 'app decoder'
             : undefined,
       });
@@ -644,7 +644,7 @@ export function buildScanPanel(ctx: PanelContext): {
       field(
         'Format',
         lookSelect,
-        `Picking the format you’re scanning is fastest and avoids false reads. “Everything” skips formats with no check digit (Pharmacode, KIX, EAN add-ons, FIM, Channel Code, custom patterns): pick those on their own. Not readable yet: ${notYet.map((id) => SYMBOL_NAMES[id] ?? id).join(', ')}.`,
+        `Picking the format you’re scanning is fastest and avoids false reads. “Everything” skips formats with no check digit (Pharmacode, KIX, EAN add-ons, FIM, Channel Code, custom patterns): pick those on their own. On the camera, pick Code One, Han Xin, DotCode or Ultracode to read them.${notYet.length ? ` Not readable yet: ${notYet.map((id) => SYMBOL_NAMES[id] ?? id).join(', ')}.` : ''}`,
       ),
     ),
     section(

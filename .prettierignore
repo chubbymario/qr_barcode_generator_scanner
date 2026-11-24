@@ -3,3 +3,4 @@ dev-dist
 coverage
 package-lock.json
 public/THIRD_PARTY_LICENSES.txt
+src/scan/twod/hanxin-tables.ts

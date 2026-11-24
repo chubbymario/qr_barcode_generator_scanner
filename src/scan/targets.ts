@@ -3,7 +3,7 @@
 // menu can be built without loading them.
 
 import { COMPOSITE_FORMATS, ZXING_FORMATS } from './support';
-import { EXTRA_FORMATS, HINT_ONLY_FORMATS } from './lists';
+import { EXTRA_FORMATS, HINT_ONLY_FORMATS, TWOD_FORMATS } from './lists';
 
 /** The parts of a zxing-cpp result the filters look at. */
 export interface ZxRead {
@@ -170,6 +170,7 @@ export const SCANNABLE = new Set([
   ...ZXING_FORMATS,
   ...COMPOSITE_FORMATS,
   ...EXTRA_FORMATS,
+  ...TWOD_FORMATS,
   ...HINT_ONLY_FORMATS,
 ]);
 
@@ -191,7 +192,11 @@ export function framesNeeded(bcid: string | undefined, label: string): number {
   // UPC-E or EAN-8 with a valid check digit), so it needs agreement too.
   if (/composite/i.test(bcid) || /composite/i.test(label)) return /upce|ean8/.test(bcid) ? 3 : 2;
   if (bcid === 'upce' || bcid === 'ean8' || bcid === 'mands') return 3;
-  if (/qr|datamatrix|aztec|pdf417|maxicode|mailmark|gs1-cc|code16k|code49|codablock/i.test(bcid))
+  if (
+    /qr|datamatrix|aztec|pdf417|maxicode|mailmark|gs1-cc|code16k|code49|codablock|codeone|hanxin|dotcode|ultracode/i.test(
+      bcid,
+    )
+  )
     return 1;
   return 2;
 }

@@ -12,6 +12,7 @@ import { PNG } from 'pngjs';
 import { collectCca, decodeCca, lumaFromRgba } from '../src/scan/extra';
 import { decodeCompositeBits } from '../src/scan/gs1cc';
 import { EXTRA_FORMATS, HINT_ONLY_FORMATS } from '../src/scan/extra';
+import { TWOD_FORMATS } from '../src/scan/lists';
 import { decodeAll } from './decode';
 import { buildPayload, CONTENT_TYPES } from '../src/qr/content';
 import { interpret } from '../src/scan/interpret';
@@ -37,6 +38,7 @@ describe('scanner support list', () => {
       ZXING_FORMATS,
       EXTRA_FORMATS,
       HINT_ONLY_FORMATS,
+      TWOD_FORMATS,
       COMPOSITE_FORMATS,
       Object.keys(UNSUPPORTED_FORMATS),
     ];

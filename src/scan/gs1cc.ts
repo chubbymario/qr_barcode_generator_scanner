@@ -199,6 +199,7 @@ export function bracketAIs(raw: string): string | null {
     let value: string;
     if (fixed !== undefined) {
       value = raw.slice(i, i + fixed);
+      if (value.length !== fixed) return null;
       i += fixed;
     } else {
       const end = raw.indexOf(FNC1, i);

@@ -2,7 +2,7 @@
 // Barcode tab shows next to each format, and tests/scan-support.test.ts checks
 // every entry against real renders so it can't drift from reality.
 
-import { EXTRA_FORMATS, HINT_ONLY_FORMATS } from './lists';
+import { EXTRA_FORMATS, HINT_ONLY_FORMATS, TWOD_FORMATS } from './lists';
 
 /** Read by zxing-cpp (compiled to WebAssembly). */
 export const ZXING_FORMATS = [
@@ -89,11 +89,6 @@ export const COMPOSITE_FORMATS = [
 
 /** No decoder exists for these in this app. */
 export const UNSUPPORTED_FORMATS: Record<string, string> = {
-  hanxin: 'Han Xin isn’t supported by the scanner yet.',
-  dotcode: 'DotCode isn’t supported by the scanner yet.',
-  gs1dotcode: 'DotCode isn’t supported by the scanner yet.',
-  codeone: 'Code One isn’t supported by the scanner yet.',
-  ultracode: 'Ultracode isn’t supported by the scanner yet.',
   flattermarken: 'Flattermarken are print-collation marks, not a data barcode.',
 };
 
@@ -104,6 +99,16 @@ export function scanSupport(bcid: string): { level: ScanLevel; note: string } {
     return { level: 'zxing', note: 'The Scan tab can read this format.' };
   if (EXTRA_FORMATS.includes(bcid))
     return { level: 'extra', note: 'The Scan tab reads this with the app’s own decoder.' };
+  if (TWOD_FORMATS.includes(bcid))
+    return {
+      level: 'extra',
+      note:
+        bcid === 'ultracode'
+          ? 'The Scan tab reads this with the app’s own decoder. Ultracode is read by its colours, so a black-and-white copy can’t be read.'
+          : bcid === 'dotcode' || bcid === 'gs1dotcode'
+            ? 'The Scan tab reads this with the app’s own decoder. Best from a file, a screenshot or a steady, square-on camera view.'
+            : 'The Scan tab reads this with the app’s own decoder.',
+    };
   if (HINT_ONLY_FORMATS.includes(bcid))
     return {
       level: 'hint',

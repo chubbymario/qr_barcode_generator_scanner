@@ -33,11 +33,15 @@ export const EXTRA_FORMATS = [
   'hibccodablockf',
 ];
 
+/** 2D formats read by the app's own decoders (src/scan/twod). */
+export const TWOD_FORMATS = ['codeone', 'hanxin', 'dotcode', 'gs1dotcode', 'ultracode'];
+
 /** Formats read only when picked in the scanner, because any bar pattern fits them. */
 export const HINT_ONLY_FORMATS = ['raw', 'daft'];
 
 /** Choices for the scanner's "Look for" list. */
 export const APP_DECODED = [
   ...EXTRA_FORMATS.filter((f) => f !== 'industrial2of5'),
+  ...TWOD_FORMATS,
   ...HINT_ONLY_FORMATS,
 ];
